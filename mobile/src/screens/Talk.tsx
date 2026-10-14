@@ -20,11 +20,32 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
   const [text, setText] = useState("");
   const [hint, setHint] = useState<string | null>(null);
   const [hearing, setHearing] = useState(false);
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const rec = useAudioRecorderState(recorder, 200);
   const pressStart = useRef(0);
   const starting = useRef<Promise<boolean> | null>(null);
   const isRec = useRef(false);
+  const silenceTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // While listening, stop by itself once the person pauses (or after 30 s).
+  const watchForSilence = () => {
+    let baseline: number | null = null;
+    let spoke = false;
+    let lastLoud = Date.now();
+    const startedAt = Date.now();
+    silenceTimer.current = setInterval(() => {
+      if (!isRec.current) return;
+      const now = Date.now();
+      const level = recorder.getStatus().metering;
+      if (typeof level === "number" && Number.isFinite(level)) {
+        if (now - startedAt < 500) baseline = baseline === null ? level : Math.min(baseline, level);
+        if (level > Math.max((baseline ?? -60) + 12, -45)) { spoke = true; lastLoud = now; }
+      }
+      const pausedAfterSpeech = spoke && now - lastLoud > 1600;
+      const neverSpoke = !spoke && now - startedAt > 8000;
+      if (pausedAfterSpeech || neverSpoke || now - startedAt > 30000) stopRecording();
+    }, 150);
+  };
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("messages").select("id, role, content, created_at")
@@ -55,6 +76,7 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
         await recorder.prepareToRecordAsync();
         recorder.record();
         isRec.current = true;
+        watchForSilence();
         return true;
       } catch {
         setHint("Couldn't start the microphone. Try again or type.");
@@ -66,6 +88,7 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
   const stopRecording = async () => {
     const ok = await starting.current;
     starting.current = null;
+    if (silenceTimer.current) { clearInterval(silenceTimer.current); silenceTimer.current = null; }
     if (!ok || !isRec.current) return;
     isRec.current = false;
     const held = Date.now() - pressStart.current;
@@ -73,7 +96,7 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
       await recorder.stop();
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
     } catch { /* already stopped */ }
-    if (held < 700) { setHint("Hold the mic while you speak, then let go."); return; }
+    if (held < 700) { setHint("Tap the mic and start talking. Chief sends when you pause."); return; }
     const uri = recorder.uri;
     if (!uri) return;
     setHearing(true);
@@ -97,7 +120,7 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
         // Shown outside the inverted list: Android flips inverted content on both axes.
         <View style={{ flex: 1, justifyContent: "flex-end", padding: space.lg, gap: space.sm }}>
           <Label style={{ color: c.chief }}>Start here</Label>
-          <Body>Hold the mic and tell Chief what's on your plate: work, side projects, family, anything you've promised yourself.</Body>
+          <Body>Tap the mic and tell Chief what's on your plate: work, side projects, family, anything you've promised yourself.</Body>
           <Body muted>Try: "I want to start a new project" or "Plan my day."</Body>
         </View>
       ) : (
@@ -143,9 +166,8 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
           ) : (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Hold to talk to Chief"
-              onPressIn={startRecording}
-              onPressOut={stopRecording}
+              accessibilityLabel="Tap to talk to Chief"
+              onPress={() => (isRec.current || starting.current ? stopRecording() : startRecording())}
               disabled={busy}
               style={[s.mic, { backgroundColor: recording ? c.slip : c.chief, opacity: busy ? 0.5 : 1, borderColor: recording ? c.slipSoft : c.chiefSoft }]}
             >
@@ -153,7 +175,7 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
             </Pressable>
           )}
         </View>
-        <Label style={{ textAlign: "right" }}>{recording ? `Listening… ${Math.floor(rec.durationMillis / 1000)}s · let go to send` : "Hold to talk"}</Label>
+        <Label style={{ textAlign: "right" }}>{recording ? `Listening… ${Math.floor(rec.durationMillis / 1000)}s · pause or tap to send` : "Tap to talk"}</Label>
       </View>
     </KeyboardAvoidingView>
   );
