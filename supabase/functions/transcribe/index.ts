@@ -36,7 +36,7 @@ Deno.serve(async (req) => {
     out.append("file", file, file.name || "voice.m4a");
     out.append("model", Deno.env.get("CHIEF_STT_MODEL") ?? "whisper-1");
     // Hint for mixed Hindi-English speech, written in Roman script.
-    out.append("prompt", "Conversation in English or Hinglish (Hindi and English mixed), written in Roman script. Example: Kal subah proposal finish karna hai, then gym.");
+    out.append("prompt", "Conversation in English or Hinglish (Hindi and English mixed), written in Roman script.");
 
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
@@ -45,7 +45,10 @@ Deno.serve(async (req) => {
     });
     if (!res.ok) return json({ error: `Couldn't hear that (${res.status}). Try again or type.` }, 502);
     const result = await res.json();
-    return json({ text: (result.text ?? "").trim() });
+    let text = (result.text ?? "").trim();
+    // Whisper sometimes echoes its hint when the recording is near-silent; never pass that on as the user's words.
+    if (text.toLowerCase().includes("written in roman script") || text.toLowerCase().includes("hindi and english mixed")) text = "";
+    return json({ text });
   } catch (e) {
     console.error(e);
     return json({ error: "Couldn't process the recording." }, 500);

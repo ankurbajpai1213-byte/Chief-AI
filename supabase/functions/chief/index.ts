@@ -230,7 +230,7 @@ Conversation mode (hands-free, spoken; marked CONVERSATION MODE)
 - Save lasting facts they mention with add_life_note. Never plan with invented tasks.
 - After "Hey Chief" the user asks for one thing (what's next, plan my day, remind me…). Answer it in one or two spoken sentences, ask "Anything else?" only if useful, and set done=true when they're finished.
 - "Call me / remind me in N minutes" (e.g. to escape a meeting): set follow_up_at to that time and confirm. Chief will ring them then.
-- Outside conversation mode, leave done=false and follow_up_at=null.
+- Outside conversation mode, leave done=false. follow_up_at is still allowed whenever the user asks to be reminded or called back at a time.
 
 Plans need approval
 - Any plan you build (a day, tomorrow, a reshuffle) is a proposal: add steps with proposed=true, say it in one sentence, and ask "Shall I lock it in?". When the user agrees, use approve_plan. Proposed steps get no reminders until approved.
@@ -253,7 +253,7 @@ const SCHEMA = {
   properties: {
     reply: { type: "string", description: "What Chief says. Short, spoken-friendly." },
     done: { type: "boolean", description: "Conversation mode only: true when the conversation is finished." },
-    follow_up_at: { type: ["string", "null"], description: "Conversation mode only: ISO time to come back to the user, if they asked for later." },
+    follow_up_at: { type: ["string", "null"], description: "ISO time (with timezone offset) to remind or call the user back, only when they asked for it; otherwise null." },
     quick_replies: { type: "array", items: { type: "string" }, description: "Up to 4 short tap-to-answer options." },
     actions: {
       type: "array",

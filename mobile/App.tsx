@@ -66,6 +66,7 @@ function Main({ session, launch, onLaunchHandled }: { session: Session; launch: 
     try {
       const r = await p;
       setQuick(r.quick_replies ?? []);
+      if (r.follow_up_at) scheduleFollowUp(r.follow_up_at, profile?.display_name).catch(() => {});
       if (voiceOn.current && r.reply) {
         Speech.stop();
         Speech.speak(r.reply, { language: "en-IN", rate: 1.0 });
@@ -78,7 +79,7 @@ function Main({ session, launch, onLaunchHandled }: { session: Session; launch: 
     } finally {
       setThinking(false);
     }
-  }, [loadProfile, refresh]);
+  }, [loadProfile, refresh, profile?.display_name]);
 
   // Android only lets Chief use the microphone in the background if the app was opened since it started.
   useEffect(() => {
