@@ -93,18 +93,19 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+      {messages.length === 0 ? (
+        // Shown outside the inverted list: Android flips inverted content on both axes.
+        <View style={{ flex: 1, justifyContent: "flex-end", padding: space.lg, gap: space.sm }}>
+          <Label style={{ color: c.chief }}>Start here</Label>
+          <Body>Hold the mic and tell Chief what's on your plate: work, side projects, family, anything you've promised yourself.</Body>
+          <Body muted>Try: "I want to start a new project" or "Plan my day."</Body>
+        </View>
+      ) : (
       <FlatList
         data={messages}
         inverted
         keyExtractor={(m) => m.id}
         contentContainerStyle={{ padding: space.lg, gap: space.sm }}
-        ListEmptyComponent={
-          <View style={{ gap: space.sm, transform: [{ scaleY: -1 }] }}>
-            <Label style={{ color: c.chief }}>Start here</Label>
-            <Body>Hold the mic and tell Chief what's on your plate: work, side projects, family, anything you've promised yourself.</Body>
-            <Body muted>Try: "I want to start a new project" or "Plan my day."</Body>
-          </View>
-        }
         renderItem={({ item }) => {
           const mine = item.role === "user";
           return (
@@ -116,6 +117,7 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
           );
         }}
       />
+      )}
 
       <View style={[s.dock, { borderTopColor: c.line, backgroundColor: c.bg }]}>
         {busy && (
