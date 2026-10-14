@@ -31,7 +31,7 @@ export type Step = {
   title: string;
   minutes: number;
   scheduled_at: string | null;
-  status: "planned" | "done" | "missed" | "parked" | "cancelled";
+  status: "proposed" | "planned" | "done" | "missed" | "parked" | "cancelled";
   postpone_count: number;
   completed_at: string | null;
   projects?: { title: string } | null;
@@ -50,7 +50,9 @@ export type ChiefEvent =
   | { type: "plan_day" }
   | { type: "morning_start" }
   | { type: "no_answer" }
-  | { type: "followup"; about?: string };
+  | { type: "followup"; about?: string }
+  | { type: "approve_plan" }
+  | { type: "reject_plan" };
 
 export type ChiefReply = { reply: string; quick_replies: string[]; changed: boolean; done?: boolean; follow_up_at?: string | null };
 

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { RefreshControl, ScrollView, View } from "react-native";
 import { supabase } from "../supabase";
 import { sendEvent } from "../api";
+import { upcomingEvents, type CalEvent } from "../calendar";
 import type { ChiefReply, Step } from "../types";
 import { space, useColors } from "../theme";
 import { Body, Button, Card, Empty, fmtDay, fmtTime, H1, Label, Row } from "../ui";
@@ -17,6 +18,8 @@ export default function Today({ refreshKey, thinking, ask, onStartConversation }
   const [unscheduled, setUnscheduled] = useState<Step[]>([]);
   const [upcoming, setUpcoming] = useState<Step[]>([]);
   const [doneToday, setDoneToday] = useState(0);
+  const [proposed, setProposed] = useState<Step[]>([]);
+  const [events, setEvents] = useState<CalEvent[]>([]);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -25,13 +28,17 @@ export default function Today({ refreshKey, thinking, ask, onStartConversation }
     const tomorrow = new Date(sod.getTime() + 86400000);
     const week = new Date(sod.getTime() + 7 * 86400000);
     const cols = "id, project_id, title, minutes, scheduled_at, status, postpone_count, completed_at, projects(title)";
-    const [t, o, u, n, d] = await Promise.all([
+    const [t, o, u, n, d, pr, ev] = await Promise.all([
       supabase.from("steps").select(cols).eq("status", "planned").gte("scheduled_at", sod.toISOString()).lt("scheduled_at", tomorrow.toISOString()).order("scheduled_at"),
       supabase.from("steps").select(cols).in("status", ["planned", "missed"]).lt("scheduled_at", sod.toISOString()).order("scheduled_at"),
       supabase.from("steps").select(cols).eq("status", "planned").is("scheduled_at", null).limit(10),
       supabase.from("steps").select(cols).eq("status", "planned").gte("scheduled_at", tomorrow.toISOString()).lt("scheduled_at", week.toISOString()).order("scheduled_at").limit(8),
       supabase.from("steps").select("id", { count: "exact", head: true }).eq("status", "done").gte("completed_at", sod.toISOString()),
+      supabase.from("steps").select(cols).eq("status", "proposed").order("scheduled_at"),
+      upcomingEvents(1),
     ]);
+    setProposed((pr.data as unknown as Step[]) ?? []);
+    setEvents(ev);
     setToday((t.data as unknown as Step[]) ?? []);
     setOverdue((o.data as unknown as Step[]) ?? []);
     setUnscheduled((u.data as unknown as Step[]) ?? []);
@@ -78,12 +85,36 @@ export default function Today({ refreshKey, thinking, ask, onStartConversation }
         <Button title="Talk it through" tone="plain" disabled={thinking} onPress={onStartConversation} />
       </Row>
 
+      {proposed.length > 0 && (
+        <Card tone="chief">
+          <Label style={{ color: c.chief }}>Chief's proposal · not locked in yet</Label>
+          {proposed.map((s) => (
+            <Body key={s.id}>
+              <Body style={{ fontWeight: "700" }}>{fmtDay(s.scheduled_at)} {fmtTime(s.scheduled_at)}</Body>  {s.title} · {s.minutes} min
+            </Body>
+          ))}
+          <Body muted>No reminders until you approve.</Body>
+          <Row>
+            <Button title="Lock it in" tone="done" filled small disabled={thinking} onPress={() => ask(sendEvent({ type: "approve_plan" }))} />
+            <Button title="Clear it" tone="slip" small disabled={thinking} onPress={() => ask(sendEvent({ type: "reject_plan" }))} />
+          </Row>
+        </Card>
+      )}
+
+      {events.length > 0 && <Label>From your calendar</Label>}
+      {events.map((e, i) => (
+        <Card key={`${e.start}-${i}`} style={{ opacity: 0.9 }}>
+          <Label>{e.all_day ? "All day" : `${fmtTime(e.start)}–${fmtTime(e.end)}`}</Label>
+          <Body style={{ fontWeight: "700" }}>{e.title}</Body>
+        </Card>
+      ))}
+
       {overdue.length > 0 && <Label style={{ color: c.slip }}>Still open from earlier</Label>}
       {overdue.map((s) => <StepCard key={s.id} step={s} late />)}
 
-      <Label>Scheduled today</Label>
+      <Label>Locked in for today</Label>
       {today.length === 0
-        ? <Empty title="No steps with a time today" hint="Tap Plan my day, or hold the mic on Talk and tell Chief what you need to get done." />
+        ? <Empty title="Nothing locked in for today" hint="Tap Plan my day or Talk it through. Chief proposes, you approve, then reminders start." />
         : today.map((s) => <StepCard key={s.id} step={s} />)}
 
       {unscheduled.length > 0 && <Label>Needs a time</Label>}

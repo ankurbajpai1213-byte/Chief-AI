@@ -3,7 +3,7 @@
     "name": "Chief",
     "slug": "chief",
     "scheme": "chief",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "xyz.chief.app",
-      "versionCode": 4,
+      "versionCode": 5,
       "adaptiveIcon": {
         "backgroundColor": "#152238",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -29,7 +29,8 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.USE_EXACT_ALARM",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.READ_CALENDAR"
       ],
       "predictiveBackGestureEnabled": false
     },
@@ -51,6 +52,12 @@
           "icon": "./assets/notification-icon.png",
           "color": "#C9781C",
           "defaultChannel": "chief"
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Chief reads your calendar so it never plans on top of your meetings."
         }
       ]
     ]

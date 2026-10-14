@@ -20,14 +20,19 @@ type StepEvent =
   | { type: "leak"; app: string; minutes: number }
   | { type: "morning_start" }
   | { type: "no_answer" }
-  | { type: "followup"; about?: string };
+  | { type: "followup"; about?: string }
+  | { type: "approve_plan" }
+  | { type: "reject_plan" };
 
-type Body = { kind: "chat"; text: string } | { kind: "event"; event: StepEvent };
+type CalEvent = { title: string; start: string; end: string; all_day?: boolean };
+
+type Body = ({ kind: "chat"; text: string } | { kind: "event"; event: StepEvent }) & { calendar?: CalEvent[] };
 
 type Action =
   | { type: "create_project"; title: string; why?: string; outcome?: string; goal_type?: string; hours_per_week?: number; deadline?: string | null; milestones?: string[]; first_step?: { title: string; minutes?: number; scheduled_at?: string | null } }
   | { type: "set_project_status"; project_id: string; status: "active" | "parked" | "done" | "dropped"; reason?: string }
-  | { type: "add_step"; project_id?: string | null; title: string; minutes?: number; scheduled_at?: string | null }
+  | { type: "add_step"; project_id?: string | null; title: string; minutes?: number; scheduled_at?: string | null; from_user?: string; proposed?: boolean }
+  | { type: "approve_plan" }
   | { type: "update_step"; step_id: string; title?: string; minutes?: number; scheduled_at?: string | null; status?: string }
   | { type: "add_life_note"; area: string; content: string }
   | { type: "update_settings"; display_name?: string; morning_checkin?: string; evening_checkin?: string; max_active_projects?: number; tone?: string; voice_replies?: boolean };
@@ -60,9 +65,18 @@ Deno.serve(async (req) => {
       await db.from("messages").insert({ user_id: userId, role: "event", content: userTurn });
     }
 
+    const calendar = (body.calendar ?? []).slice(0, 80).map((e) => ({ title: String(e.title ?? "").slice(0, 120), start: e.start, end: e.end, all_day: !!e.all_day }));
     const context = await loadContext(db, userId);
-    const brain = await think(context, userTurn);
-    const notes = await applyActions(db, userId, brain.actions ?? [], context.profile.max_active_projects);
+    const brain = await think(context, userTurn, calendar);
+    // What the user has actually said: steps without a project must trace back to this.
+    const evidence = [
+      ...context.history.filter((m) => m.role === "user").map((m) => m.content),
+      ...(body.kind === "chat" ? [body.text] : []),
+      ...context.lifeNotes.map((n) => n.content),
+      ...calendar.map((e) => e.title),
+      ...context.projects.map((p) => p.title),
+    ].join(" ").toLowerCase();
+    const notes = await applyActions(db, userId, brain.actions ?? [], context.profile.max_active_projects, evidence);
 
     let reply = (brain.reply ?? "").trim();
     if (notes.length) reply += (reply ? NL + NL : "") + notes.join(" ");
@@ -133,13 +147,21 @@ async function applyEvent(db: SupabaseClient, userId: string, ev: StepEvent): Pr
       await db.from("checkins").insert({ user_id: userId, kind: "morning", day: new Date().toISOString().slice(0, 10) });
       return "[event] Morning check-in. In 2–3 sentences: what today holds, the one thing that matters most, and ask if the plan still works.";
     case "plan_day":
-      return "[event] Plan my day. Use only real things: my open and overdue steps, project next steps, and what I've told you. If you don't know enough about today (meetings, must-dos), ask me first in one short question instead of planning. Never add filler like breaks, meals or generic deep work. Propose times with update_step / add_step, then ask me to confirm.";
+      return "[event] Plan my day. Use only real things: my open and overdue steps, project next steps, my calendar events, and what I've told you. If you don't know enough about today (meetings, must-dos), ask me first in one short question instead of planning. Never add filler like breaks, meals, exercise or generic deep work. Add steps with proposed=true and ask me to approve.";
     case "morning_start": {
       await db.from("checkins").insert({ user_id: userId, kind: "morning", day: new Date().toISOString().slice(0, 10) });
       return "[event] CONVERSATION MODE, morning. I just unlocked my phone for the first time today. Greet me by name if you know it and ask how I slept. One question only.";
     }
     case "no_answer":
       return "[event] CONVERSATION MODE: I didn't answer your last question (no speech for several seconds). Don't repeat it. Move on to the next useful question, or if I've missed two in a row, end politely: say I can tap Chief anytime, and set done=true.";
+    case "approve_plan": {
+      const { data } = await db.from("steps").update({ status: "planned" }).eq("status", "proposed").select("id");
+      return `[event] I approved your proposed plan (${data?.length ?? 0} steps are now scheduled with reminders). Confirm in one short line.`;
+    }
+    case "reject_plan": {
+      await db.from("steps").update({ status: "cancelled" }).eq("status", "proposed");
+      return "[event] I rejected your proposed plan; it's cleared. Ask in one short question what my day actually looks like.";
+    }
     case "followup":
       return `[event] CONVERSATION MODE: you asked to come back to me now${ev.about ? ` about: ${ev.about}` : ""}. Pick up from there in one or two sentences.`;
     case "leak":
@@ -156,7 +178,7 @@ async function loadContext(db: SupabaseClient, userId: string) {
     db.from("profiles").select("*").eq("id", userId).single(),
     db.from("life_notes").select("area, content").order("created_at"),
     db.from("projects").select("id, title, why, outcome, goal_type, hours_per_week, deadline, status, milestones, status_reason").in("status", ["active", "parked"]),
-    db.from("steps").select("id, project_id, title, minutes, scheduled_at, status, postpone_count, last_reason").in("status", ["planned", "missed"]).or(`scheduled_at.is.null,scheduled_at.lte.${until}`).order("scheduled_at", { nullsFirst: false }).limit(60),
+    db.from("steps").select("id, project_id, title, minutes, scheduled_at, status, postpone_count, last_reason").in("status", ["proposed", "planned", "missed"]).or(`scheduled_at.is.null,scheduled_at.lte.${until}`).order("scheduled_at", { nullsFirst: false }).limit(60),
     db.from("steps").select("title, completed_at").eq("status", "done").gte("completed_at", since).limit(40),
     db.from("messages").select("role, content, created_at").order("created_at", { ascending: false }).limit(24),
   ]);
@@ -208,8 +230,18 @@ Conversation mode (hands-free, spoken; marked CONVERSATION MODE)
 - Save lasting facts they mention with add_life_note. Never plan with invented tasks.
 - Outside conversation mode, leave done=false and follow_up_at=null.
 
+Plans need approval
+- Any plan you build (a day, tomorrow, a reshuffle) is a proposal: add steps with proposed=true, say it in one sentence, and ask "Shall I lock it in?". When the user agrees, use approve_plan. Proposed steps get no reminders until approved.
+- Every add_step must include from_user: the user's own words (copied exactly, a few words) that this step comes from, or a calendar event title. No source, no step.
+- Calendar events in the context are real commitments: plan around them, never on top of them.
+
+What you can and can't do
+- You can: talk, plan, add/move/finish steps, manage projects, remember life notes, read the phone calendar when the user has turned it on in Settings.
+- You cannot: sign in to accounts, connect services, send emails or messages, make calls, or browse. Never say you are doing these. If asked, say it isn't possible from chat yet; for the calendar, point to Settings → "Use my phone's calendar".
+- Life notes are only for lasting facts about the user's life (job, routine, family, health limits, goals). Never save what happened in this chat.
+
 Rules
-- Never invent tasks, steps, meetings or projects the user hasn't mentioned. If there isn't enough to work with, ask.
+- Never invent tasks, steps, meetings or projects the user hasn't mentioned. Earlier plans in the conversation are not evidence. If there isn't enough to work with, ask.
 - Use only ids that appear in the context. Times are ISO 8601 with the user's UTC offset, in the future.
 - Respond ONLY by calling the respond tool / returning the JSON object. Put what you say in "reply".`;
 
@@ -225,7 +257,9 @@ const SCHEMA = {
       items: {
         type: "object",
         properties: {
-          type: { type: "string", enum: ["create_project", "set_project_status", "add_step", "update_step", "add_life_note", "update_settings"] },
+          type: { type: "string", enum: ["create_project", "set_project_status", "add_step", "update_step", "add_life_note", "update_settings", "approve_plan"] },
+          from_user: { type: "string", description: "add_step: the user's exact words or calendar title this step comes from." },
+          proposed: { type: "boolean", description: "add_step: true while the plan awaits the user's approval." },
           project_id: { type: ["string", "null"] }, step_id: { type: "string" },
           title: { type: "string" }, why: { type: "string" }, outcome: { type: "string" },
           goal_type: { type: "string", enum: ["money", "business", "personal", "health", "learning", "family", "other"] },
@@ -245,7 +279,7 @@ const SCHEMA = {
   required: ["reply"],
 };
 
-async function think(ctx: Awaited<ReturnType<typeof loadContext>>, userTurn: string): Promise<Brain> {
+async function think(ctx: Awaited<ReturnType<typeof loadContext>>, userTurn: string, calendar: CalEvent[]): Promise<Brain> {
   const state = {
     now: ctx.now,
     settings: {
@@ -256,6 +290,7 @@ async function think(ctx: Awaited<ReturnType<typeof loadContext>>, userTurn: str
     life_notes: ctx.lifeNotes,
     projects: ctx.projects,
     open_steps: ctx.steps,
+    calendar_events: calendar.length ? calendar : "not connected (user can turn on 'Use my phone's calendar' in Settings)",
     done_last_7_days: ctx.doneThisWeek,
   };
   const transcript = ctx.history.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join(NL);
@@ -311,7 +346,7 @@ async function callOpenAI(key: string, prompt: string): Promise<Brain> {
 
 // ---------- apply what the brain decided, with guard rails ----------
 
-async function applyActions(db: SupabaseClient, userId: string, actions: Action[], maxActive: number): Promise<string[]> {
+async function applyActions(db: SupabaseClient, userId: string, actions: Action[], maxActive: number, evidence: string): Promise<string[]> {
   const notes: string[] = [];
   const future = (t?: string | null) => (t && !Number.isNaN(Date.parse(t)) ? new Date(t).toISOString() : null);
   const mins = (m?: number) => Math.min(480, Math.max(5, Math.round(m ?? 30)));
@@ -342,16 +377,27 @@ async function applyActions(db: SupabaseClient, userId: string, actions: Action[
         }
         break;
       }
-      case "add_step":
-        await db.from("steps").insert({ user_id: userId, project_id: a.project_id || null, title: a.title, minutes: mins(a.minutes), scheduled_at: future(a.scheduled_at) });
+      case "add_step": {
+        // Guard against invented tasks: a step must belong to a project or trace back to the user's words.
+        const quote = (a.from_user ?? "").toLowerCase().replace(/[^a-z0-9\u0900-\u097f ]/g, " ").replace(/ +/g, " ").trim();
+        const words = quote.split(" ").filter((w) => w.length > 2);
+        const grounded = !!a.project_id || (words.length > 0 && words.filter((w) => evidence.includes(w)).length >= Math.ceil(words.length * 0.6));
+        if (!grounded) { console.warn("skipped ungrounded step", a.title, a.from_user); break; }
+        await db.from("steps").insert({ user_id: userId, project_id: a.project_id || null, title: a.title, minutes: mins(a.minutes), scheduled_at: future(a.scheduled_at), status: a.proposed ? "proposed" : "planned" });
+        break;
+      }
+      case "approve_plan":
+        await db.from("steps").update({ status: "planned" }).eq("status", "proposed");
         break;
       case "update_step": {
         const patch: Record<string, unknown> = {};
         if (a.title) patch.title = a.title;
         if (a.minutes) patch.minutes = mins(a.minutes);
-        if (a.scheduled_at !== undefined) { patch.scheduled_at = future(a.scheduled_at); patch.status = "planned"; }
-        if (a.status && ["planned", "done", "missed", "parked", "cancelled"].includes(a.status)) patch.status = a.status;
+        if (a.scheduled_at !== undefined) patch.scheduled_at = future(a.scheduled_at);
+        if (a.status && ["proposed", "planned", "done", "missed", "parked", "cancelled"].includes(a.status)) patch.status = a.status;
         if (Object.keys(patch).length) await db.from("steps").update(patch).eq("id", a.step_id);
+        // A missed step that gets a new time is back on the plan (proposals stay proposals).
+        if (a.scheduled_at && !a.status) await db.from("steps").update({ status: "planned" }).eq("id", a.step_id).eq("status", "missed");
         break;
       }
       case "add_life_note":

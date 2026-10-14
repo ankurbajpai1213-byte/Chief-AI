@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { AppState, ScrollView, Switch, TextInput, View } from "react-native";
+import { calendarEnabled, setCalendarEnabled } from "../calendar";
 import { canOpenByItself, companionAvailable, openOpenByItselfSettings, resetMorningToday } from "../../modules/chief-companion";
 import { supabase } from "../supabase";
 import type { LifeNote, Profile } from "../types";
@@ -24,6 +25,8 @@ export default function Settings({ profile, onSaved }: Props) {
   const [morningAuto, setMorningAuto] = useState(true);
   const [wake, setWake] = useState("06:00");
   const [canOpen, setCanOpen] = useState(false);
+  const [useCal, setUseCal] = useState(false);
+  const [calMsg, setCalMsg] = useState<string | null>(null);
   const [notes, setNotes] = useState<LifeNote[]>([]);
   const [area, setArea] = useState("work");
   const [noteText, setNoteText] = useState("");
@@ -41,6 +44,8 @@ export default function Settings({ profile, onSaved }: Props) {
     setMorningAuto(profile.morning_auto);
     setWake(profile.wake_time.slice(0, 5));
   }, [profile]);
+
+  useEffect(() => { calendarEnabled().then(setUseCal); }, []);
 
   // Re-check "open by itself" when coming back from Android settings.
   useEffect(() => {
@@ -85,6 +90,23 @@ export default function Settings({ profile, onSaved }: Props) {
         <H1>Settings</H1>
       </View>
 
+      {companionAvailable && (
+        <Card>
+          <Label>Chief starts your morning</Label>
+          <Body muted>After your first unlock past your wake time, Chief opens and talks you through the day. Once a day, only in the morning.</Body>
+          <Row style={{ justifyContent: "space-between" }}>
+            <Body>Start my morning automatically</Body>
+            <Switch value={morningAuto} onValueChange={setMorningAuto} trackColor={{ true: c.chief, false: c.line }} />
+          </Row>
+          <Label>Wake time</Label>
+          <TextInput style={input} value={wake} onChangeText={setWake} keyboardType="numbers-and-punctuation" placeholder="06:00" placeholderTextColor={c.muted} />
+          {morningAuto && !canOpen && (
+            <View style={{ gap: space.xs }}>
+              <Body style={{ color: c.slip }}>To open by itself, Chief needs "Display over other apps". Without it, Chief sends a notification to tap instead.</Body>
+              <Button title="Allow Chief to open by itself" small onPress={() => openOpenByItselfSettings()} />
+            </View>
+          )}
+
       <Card>
         <Label>Your name</Label>
         <TextInput style={input} value={name} onChangeText={setName} placeholder="What Chief calls you" placeholderTextColor={c.muted} />
@@ -110,28 +132,30 @@ export default function Settings({ profile, onSaved }: Props) {
         <Button title="Save" filled busy={saving} onPress={save} />
       </Card>
 
-      {companionAvailable && (
-        <Card>
-          <Label>Chief starts your morning</Label>
-          <Body muted>After your first unlock past your wake time, Chief opens and talks you through the day. Once a day, only in the morning.</Body>
-          <Row style={{ justifyContent: "space-between" }}>
-            <Body>Start my morning automatically</Body>
-            <Switch value={morningAuto} onValueChange={setMorningAuto} trackColor={{ true: c.chief, false: c.line }} />
-          </Row>
-          <Label>Wake time</Label>
-          <TextInput style={input} value={wake} onChangeText={setWake} keyboardType="numbers-and-punctuation" placeholder="06:00" placeholderTextColor={c.muted} />
-          {morningAuto && !canOpen && (
-            <View style={{ gap: space.xs }}>
-              <Body style={{ color: c.slip }}>To open by itself, Chief needs "Display over other apps". Without it, Chief sends a notification to tap instead.</Body>
-              <Button title="Allow Chief to open by itself" small onPress={() => openOpenByItselfSettings()} />
-            </View>
-          )}
           {morningAuto && canOpen && <Body style={{ color: c.done }}>Chief can open by itself.</Body>}
           <Body muted>Android shows a small "Chief is ready for your morning" notification while this is on.</Body>
           <Button title="Rehearse tomorrow's start today" tone="plain" small onPress={() => { resetMorningToday(); setMsg({ text: "Lock your phone, then unlock it. Chief should start about a minute later (only after your wake time)." }); }} />
           <Button title="Save" filled busy={saving} onPress={save} />
         </Card>
       )}
+
+      <Card>
+        <Label>Your calendar</Label>
+        <Body muted>Chief reads the calendars on this phone (including Google Calendar and work calendars synced to it) so it plans around your meetings. Read only.</Body>
+        <Row style={{ justifyContent: "space-between" }}>
+          <Body>Use my phone's calendar</Body>
+          <Switch
+            value={useCal}
+            trackColor={{ true: c.chief, false: c.line }}
+            onValueChange={async (on) => {
+              const ok = await setCalendarEnabled(on);
+              setUseCal(ok);
+              setCalMsg(on && !ok ? "Calendar access was denied. Allow it in Android settings → Apps → Chief → Permissions." : null);
+            }}
+          />
+        </Row>
+        {calMsg && <Body style={{ color: c.slip }}>{calMsg}</Body>}
+      </Card>
 
       <Card>
         <Label>Your life, for Chief</Label>
