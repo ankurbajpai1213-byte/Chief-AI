@@ -42,23 +42,18 @@ jobs:
       - name: Type-check
         run: npx tsc --noEmit
 
-      - name: Cache wake-word model
-        uses: actions/cache@v4
-        with:
-          path: mobile/modules/chief-companion/android/src/main/assets/vosk-model
-          key: vosk-model-small-en-us-0.15
-
-      - name: Fetch wake-word model (open source, Apache 2.0)
+      # The wake-word model is not bundled (keeps the APK ~45 MB). The app downloads it once
+      # from this release; make sure the release exists.
+      - name: Publish wake-word model (open source, Apache 2.0)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          DIR=modules/chief-companion/android/src/main/assets/vosk-model
-          if [ ! -f "$DIR/am/final.mdl" ]; then
-            curl -fsSL -o /tmp/vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-            unzip -q /tmp/vosk.zip -d /tmp/vosk
-            mkdir -p "$(dirname "$DIR")"
-            rm -rf "$DIR"
-            mv /tmp/vosk/vosk-model-small-en-us-0.15 "$DIR"
+          if ! gh release view vosk-model --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            curl -fsSL -o /tmp/vosk-model-small-en-us-0.15.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+            gh release create vosk-model /tmp/vosk-model-small-en-us-0.15.zip --repo "$GITHUB_REPOSITORY" \
+              --title "Wake word model (Vosk small en-US 0.15)" --notes "Downloaded by the app on first use. Apache 2.0, alphacephei.com/vosk." \
+              --prerelease --latest=false
           fi
-          ls "$DIR"
 
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install

@@ -206,9 +206,8 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     }
     // No Picovoice key: use the open-source engine (no account needed).
     if (p.accessKey.isBlank()) {
-      if (!VoskWake.modelBundled(this)) { p.lastError = "Wake word model missing from this build."; return }
       p.lastError = ""
-      vosk = VoskWake(applicationContext, onWake = { onWakeWord() }, onError = { msg -> p.lastError = msg; vosk = null })
+      vosk = VoskWake(applicationContext, onWake = { onWakeWord() }, onError = { msg -> p.lastError = msg; vosk = null }, onStatus = { msg -> p.lastError = msg })
       vosk?.start()
       return
     }
