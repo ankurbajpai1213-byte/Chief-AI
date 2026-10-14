@@ -1,10 +1,18 @@
 import { Platform } from "react-native";
 import { requireOptionalNativeModule } from "expo-modules-core";
 
+export type WakeStatus = {
+  on: boolean; hasKey: boolean; running?: boolean; listening?: boolean;
+  micAllowedInBackground?: boolean; paused?: boolean; batteryUnrestricted?: boolean;
+};
+
 type Native = {
   configure(enabled: boolean, wakeHour: number, wakeMinute: number, delaySeconds: number): boolean;
   configureWake(on: boolean, accessKey: string): boolean;
-  wakeStatus(): { on: boolean; hasKey: boolean };
+  wakeStatus(): WakeStatus;
+  refresh(): boolean;
+  batteryUnrestricted(): boolean;
+  openBatterySettings(): boolean;
   pauseWake(): boolean;
   resumeWake(): boolean;
   setSpeak(on: boolean): boolean;
@@ -37,7 +45,10 @@ export const resetMorningToday = () => safe(() => native?.resetToday(), undefine
 
 // "Hey Chief"
 export const configureWake = (on: boolean, accessKey = "") => safe(() => native?.configureWake(on, accessKey) ?? false, false);
-export const wakeStatus = () => safe(() => native?.wakeStatus() ?? { on: false, hasKey: false }, { on: false, hasKey: false });
+export const wakeStatus = (): WakeStatus => safe(() => native?.wakeStatus() ?? { on: false, hasKey: false }, { on: false, hasKey: false });
+export const refreshCompanion = () => safe(() => native?.refresh(), undefined);
+export const batteryUnrestricted = () => safe(() => native?.batteryUnrestricted() ?? true, true);
+export const openBatterySettings = () => safe(() => native?.openBatterySettings(), undefined);
 export const pauseWake = () => safe(() => native?.pauseWake(), undefined);
 export const resumeWake = () => safe(() => native?.resumeWake(), undefined);
 

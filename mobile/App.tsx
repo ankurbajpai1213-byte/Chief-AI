@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { AppState, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
@@ -9,7 +9,7 @@ import { supabase } from "./src/supabase";
 import { sendEvent } from "./src/api";
 import { ACTION_DONE, ACTION_LATER, ACTION_SMALLER, rescheduleAll, scheduleFollowUp, setupNotifications } from "./src/notify";
 import type { ChiefEvent, ChiefReply, Profile, Tab } from "./src/types";
-import { configureMorning } from "./modules/chief-companion";
+import { configureMorning, refreshCompanion } from "./modules/chief-companion";
 import { useColors } from "./src/theme";
 import Login from "./src/screens/Login";
 import Talk from "./src/screens/Talk";
@@ -79,6 +79,13 @@ function Main({ session, launch, onLaunchHandled }: { session: Session; launch: 
       setThinking(false);
     }
   }, [loadProfile, refresh]);
+
+  // Android only lets Chief use the microphone in the background if the app was opened since it started.
+  useEffect(() => {
+    refreshCompanion();
+    const sub = AppState.addEventListener("change", (st) => { if (st === "active") refreshCompanion(); });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     loadProfile();

@@ -96,6 +96,7 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
   useEffect(() => {
     alive.current = true;
     pauseWake(); // free the microphone from "Hey Chief" while we talk
+    const keepPaused = setInterval(() => pauseWake(), 60000);
     const run = async () => {
       let next: Promise<ChiefReply>;
       let silentTurns = 0;
@@ -150,6 +151,7 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
       alive.current = false;
       Speech.stop();
       recorder.stop().catch(() => {});
+      clearInterval(keepPaused);
       resumeWake();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -80,6 +80,8 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
   private var registered = false
   private var porcupine: PorcupineManager? = null
   private var wakePaused = false
+  private var micForeground = false
+  private val resumeRunnable = Runnable { wakePaused = false; restartWakeWord() }
   private var tts: TextToSpeech? = null
   private var ttsReady = false
   private val ttsQueue = ArrayList<String>()
@@ -97,6 +99,7 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
 
   override fun onCreate() {
     super.onCreate()
+    instance = this
     ensureChannels(this)
     goForeground()
     val filter = IntentFilter().apply {
@@ -111,37 +114,60 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
   private fun micAllowed(): Boolean =
     checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
+  private fun statusText(p: Prefs): String = when {
+    p.wakeWordOn && p.accessKey.isNotBlank() && !micForeground -> "\"Hey Chief\" is paused. Tap to open Chief and switch it back on."
+    p.wakeWordOn && p.accessKey.isNotBlank() -> "Listening for \"Hey Chief\"."
+    p.enabled -> "Chief will start your day after you unlock your phone."
+    else -> "Chief will speak your reminders."
+  }
+
   private fun goForeground() {
     val p = Prefs(this)
-    val text = when {
-      p.wakeWordOn && p.accessKey.isNotBlank() -> "Listening for \"Hey Chief\"."
-      p.enabled -> "Chief will start your day after you unlock your phone."
-      else -> "Chief will speak your reminders."
-    }
-    val n = buildNotification(this, SERVICE_CHANNEL, "Chief is with you", text, ongoing = true, contentUri = null)
+    val wantMic = p.wakeWordOn && micAllowed()
+    micForeground = false
     if (Build.VERSION.SDK_INT >= 34) {
-      val wantMic = p.wakeWordOn && micAllowed()
       try {
         val type = if (wantMic) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
                    else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-        startForeground(SERVICE_ID, n, type)
+        micForeground = wantMic
+        startForeground(SERVICE_ID, buildNotification(this, SERVICE_CHANNEL, "Chief is with you", statusText(p), ongoing = true, contentUri = null), type)
       } catch (e: Exception) {
-        // Android refuses microphone use when started from the background; the app retries when opened.
+        // Android refuses the microphone when this starts from the background (after the app was closed).
         Log.w(TAG, "microphone foreground refused: ${e.message}")
-        startForeground(SERVICE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        micForeground = false
+        startForeground(SERVICE_ID, buildNotification(this, SERVICE_CHANNEL, "Chief is with you", statusText(p), ongoing = true, contentUri = null), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
       }
-    } else if (Build.VERSION.SDK_INT >= 29) {
-      startForeground(SERVICE_ID, n)
     } else {
-      startForeground(SERVICE_ID, n)
+      micForeground = wantMic
+      startForeground(SERVICE_ID, buildNotification(this, SERVICE_CHANNEL, "Chief is with you", statusText(p), ongoing = true, contentUri = null))
     }
   }
+
+  /** Free the microphone for the app; listening resumes by itself after [ms] unless renewed. */
+  fun pauseFor(ms: Long) {
+    wakePaused = true
+    stopWakeWord()
+    handler.removeCallbacks(resumeRunnable)
+    handler.postDelayed(resumeRunnable, ms)
+  }
+
+  fun resumeNow() {
+    handler.removeCallbacks(resumeRunnable)
+    wakePaused = false
+    restartWakeWord()
+  }
+
+  fun status(): Map<String, Any> = mapOf(
+    "listening" to (porcupine != null),
+    "micAllowedInBackground" to micForeground,
+    "paused" to wakePaused,
+  )
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_REFRESH -> { goForeground(); restartWakeWord() }
-      ACTION_PAUSE_WAKE -> { wakePaused = true; stopWakeWord() }
-      ACTION_RESUME_WAKE -> { wakePaused = false; restartWakeWord() }
+      ACTION_PAUSE_WAKE -> pauseFor(90_000)
+      ACTION_RESUME_WAKE -> resumeNow()
       ACTION_ANNOUNCE -> intent.getStringExtra(EXTRA_TEXT)?.let { speak(it) }
       else -> restartWakeWord()
     }
@@ -151,8 +177,10 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
 
   override fun onDestroy() {
     cancelPending()
+    handler.removeCallbacks(resumeRunnable)
     stopWakeWord()
     tts?.shutdown()
+    if (instance === this) instance = null
     if (registered) unregisterReceiver(receiver)
     registered = false
     super.onDestroy()
@@ -164,6 +192,7 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     stopWakeWord()
     val p = Prefs(this)
     if (!p.wakeWordOn || wakePaused || p.accessKey.isBlank() || !micAllowed()) return
+    if (!micForeground) { Log.w(TAG, "wake word needs the app opened once to get microphone access"); return }
     try {
       val builder = PorcupineManager.Builder().setAccessKey(p.accessKey).setSensitivity(0.6f)
       val custom = try { assets.list("")?.contains(KEYWORD_FILE) == true } catch (_: Exception) { false }
@@ -185,12 +214,9 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
 
   private fun onWakeWord() {
     // Release the microphone so the app can listen to the request.
-    wakePaused = true
-    stopWakeWord()
+    pauseFor(120_000)
     try { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80).startTone(ToneGenerator.TONE_PROP_ACK, 150) } catch (_: Exception) {}
     launchChief(this, WAKE_URI, "Chief is listening", "Tap to talk to Chief.")
-    // Safety net: if the app never resumes us, start listening again in 2 minutes.
-    handler.postDelayed({ if (wakePaused) { wakePaused = false; restartWakeWord() } }, 120_000)
   }
 
   // ---------- speaking reminders ----------
@@ -243,6 +269,8 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
   }
 
   companion object {
+    /** The running service, for direct calls from the app (no background-start limits). */
+    @Volatile var instance: CompanionService? = null
     const val SERVICE_CHANNEL = "chief_companion"
     const val MORNING_CHANNEL = "chief_morning"
     const val SERVICE_ID = 4101

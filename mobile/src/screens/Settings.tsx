@@ -3,7 +3,7 @@ import { AppState, ScrollView, Switch, TextInput, View } from "react-native";
 import { calendarEnabled, setCalendarEnabled } from "../calendar";
 import {
   canOpenByItself, companionAvailable, configureWake, openOpenByItselfSettings, resetMorningToday,
-  sayNow, setSpeak, speakEnabled, wakeStatus,
+  sayNow, setSpeak, speakEnabled, wakeStatus, refreshCompanion, openBatterySettings, type WakeStatus,
 } from "../../modules/chief-companion";
 import { AudioModule } from "expo-audio";
 import { supabase } from "../supabase";
@@ -35,6 +35,15 @@ export default function Settings({ profile, onSaved }: Props) {
   const [wakeKey, setWakeKey] = useState("");
   const [speak, setSpeakState] = useState(true);
   const [wakeMsg, setWakeMsg] = useState<string | null>(null);
+  const [live, setLive] = useState<WakeStatus | null>(null);
+
+  // Show what the wake word is actually doing, refreshed every few seconds.
+  useEffect(() => {
+    const tick = () => setLive(wakeStatus());
+    tick();
+    const t = setInterval(tick, 3000);
+    return () => clearInterval(t);
+  }, []);
   const [calMsg, setCalMsg] = useState<string | null>(null);
   const [notes, setNotes] = useState<LifeNote[]>([]);
   const [area, setArea] = useState("work");
@@ -180,6 +189,20 @@ export default function Settings({ profile, onSaved }: Props) {
             <Switch value={wakeOn} onValueChange={toggleWake} trackColor={{ true: c.chief, false: c.line }} />
           </Row>
           {wakeMsg && <Body style={{ color: wakeMsg.startsWith("Listening") ? c.done : c.slip }}>{wakeMsg}</Body>}
+          {wakeOn && live && (
+            <View style={{ gap: space.xs }}>
+              <Body style={{ color: live.listening ? c.done : c.slip, fontWeight: "700" }}>
+                {live.listening ? "● Listening now" : live.paused ? "Paused while you talk to Chief" : "○ Not listening"}
+              </Body>
+              {!live.listening && !live.paused && (
+                <Body muted>Android stopped the microphone. Tap Restart listening; if it keeps stopping, allow Chief to run without battery limits.</Body>
+              )}
+              <Row>
+                <Button title="Restart listening" small onPress={() => { refreshCompanion(); setTimeout(() => setLive(wakeStatus()), 1500); }} />
+                {!live.batteryUnrestricted && <Button title="Remove battery limits" tone="plain" small onPress={() => openBatterySettings()} />}
+              </Row>
+            </View>
+          )}
           <Row style={{ justifyContent: "space-between" }}>
             <Body>Say reminders out loud (not on silent)</Body>
             <Switch value={speak} onValueChange={(on) => { setSpeak(on); setSpeakState(on); }} trackColor={{ true: c.chief, false: c.line }} />

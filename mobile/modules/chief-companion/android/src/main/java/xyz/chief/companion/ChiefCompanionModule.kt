@@ -10,6 +10,12 @@ import expo.modules.kotlin.modules.ModuleDefinition
 class ChiefCompanionModule : Module() {
   private val ctx get() = appContext.reactContext!!
 
+  private fun batteryUnrestricted(): Boolean {
+    if (Build.VERSION.SDK_INT < 23) return true
+    val pm = ctx.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+    return pm.isIgnoringBatteryOptimizations(ctx.packageName)
+  }
+
   private fun apply() {
     val p = Prefs(ctx)
     if (p.needsService) CompanionService.send(ctx, CompanionService.ACTION_REFRESH) else CompanionService.stop(ctx)
@@ -40,11 +46,43 @@ class ChiefCompanionModule : Module() {
 
     Function("wakeStatus") {
       val p = Prefs(ctx)
-      mapOf("on" to p.wakeWordOn, "hasKey" to p.accessKey.isNotBlank())
+      val live = CompanionService.instance?.status() ?: emptyMap()
+      mapOf(
+        "on" to p.wakeWordOn,
+        "hasKey" to p.accessKey.isNotBlank(),
+        "running" to (CompanionService.instance != null),
+        "listening" to (live["listening"] ?: false),
+        "micAllowedInBackground" to (live["micAllowedInBackground"] ?: false),
+        "paused" to (live["paused"] ?: false),
+        "batteryUnrestricted" to batteryUnrestricted(),
+      )
     }
 
-    Function("pauseWake") { CompanionService.send(ctx, CompanionService.ACTION_PAUSE_WAKE); true }
-    Function("resumeWake") { CompanionService.send(ctx, CompanionService.ACTION_RESUME_WAKE); true }
+    // Direct calls into the running service; fall back to an intent if it isn't running.
+    Function("pauseWake") {
+      CompanionService.instance?.pauseFor(90_000) ?: CompanionService.send(ctx, CompanionService.ACTION_PAUSE_WAKE)
+      true
+    }
+    Function("resumeWake") {
+      CompanionService.instance?.resumeNow() ?: CompanionService.send(ctx, CompanionService.ACTION_RESUME_WAKE)
+      true
+    }
+
+    // Called whenever the app comes to the front: Android only grants the microphone then.
+    Function("refresh") {
+      if (Prefs(ctx).needsService) CompanionService.send(ctx, CompanionService.ACTION_REFRESH)
+      true
+    }
+
+    Function("batteryUnrestricted") { batteryUnrestricted() }
+    Function("openBatterySettings") {
+      val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + ctx.packageName))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      try { ctx.startActivity(i) } catch (_: Exception) {
+        ctx.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+      }
+      true
+    }
 
     // Spoken reminders.
     Function("setSpeak") { on: Boolean ->
