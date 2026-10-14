@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "Chief",
+    "slug": "chief",
+    "scheme": "chief",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#152238"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "xyz.chief.app"
+    },
+    "android": {
+      "package": "xyz.chief.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#152238",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.USE_EXACT_ALARM",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Chief listens when you hold the mic button.",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#C9781C",
+          "defaultChannel": "chief"
+        }
+      ]
+    ]
+  }
+}
