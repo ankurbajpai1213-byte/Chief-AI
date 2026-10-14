@@ -82,6 +82,7 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
   private var pending: Runnable? = null
   private var registered = false
   private var porcupine: PorcupineManager? = null
+  private var vosk: VoskWake? = null
   private var wakePaused = false
   private var micForeground = false
   private val resumeRunnable = Runnable { wakePaused = false; restartWakeWord() }
@@ -118,8 +119,8 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
   private fun statusText(p: Prefs): String = when {
-    p.wakeWordOn && p.accessKey.isNotBlank() && !micForeground -> "\"Hey Chief\" is paused. Tap to open Chief and switch it back on."
-    p.wakeWordOn && p.accessKey.isNotBlank() -> "Listening for \"Hey Chief\"."
+    p.wakeWordOn && !micForeground -> "\"Hey Chief\" is paused. Tap to open Chief and switch it back on."
+    p.wakeWordOn -> "Listening for \"Hey Chief\"."
     p.enabled -> "Chief will start your day after you unlock your phone."
     else -> "Chief will speak your reminders."
   }
@@ -163,7 +164,8 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
   }
 
   fun status(): Map<String, Any> = mapOf(
-    "listening" to (porcupine != null),
+    "listening" to (porcupine != null || vosk?.running == true),
+    "engine" to (if (porcupine != null) "porcupine" else if (vosk != null) "open-source" else "none"),
     "micAllowedInBackground" to micForeground,
     "paused" to wakePaused,
   )
@@ -197,10 +199,17 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     stopWakeWord()
     val p = Prefs(this)
     if (!p.wakeWordOn || wakePaused) return
-    if (p.accessKey.isBlank()) { p.lastError = "No Picovoice AccessKey saved."; return }
     if (!micAllowed()) { p.lastError = "Microphone permission is off for Chief."; return }
     if (!micForeground) {
       if (p.lastError.isBlank()) p.lastError = "Microphone not available in the background yet. Open Chief once."
+      return
+    }
+    // No Picovoice key: use the open-source engine (no account needed).
+    if (p.accessKey.isBlank()) {
+      if (!VoskWake.modelBundled(this)) { p.lastError = "Wake word model missing from this build."; return }
+      p.lastError = ""
+      vosk = VoskWake(applicationContext, onWake = { onWakeWord() }, onError = { msg -> p.lastError = msg; vosk = null })
+      vosk?.start()
       return
     }
     try {
@@ -222,6 +231,8 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     try { porcupine?.stop() } catch (_: Exception) {}
     try { porcupine?.delete() } catch (_: Exception) {}
     porcupine = null
+    vosk?.stop()
+    vosk = null
   }
 
   private fun onWakeWord() {
@@ -245,6 +256,7 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
   private fun speak(text: String) {
     val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
     if (am.ringerMode != AudioManager.RINGER_MODE_NORMAL) return // silent or vibrate: stay quiet
+    if (Prefs(this).wakeWordOn && !wakePaused) pauseFor(15_000) // don't wake on Chief's own voice
     if (tts == null) tts = TextToSpeech(this, this)
     if (ttsReady) tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "chief-${System.nanoTime()}")
     else ttsQueue.add(text)

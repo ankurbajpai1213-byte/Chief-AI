@@ -76,12 +76,11 @@ export default function Settings({ profile, onSaved }: Props) {
     if (on) {
       const { granted } = await AudioModule.requestRecordingPermissionsAsync();
       if (!granted) { setWakeMsg("Chief needs the microphone to hear \"Hey Chief\"."); return; }
-      if (!hasKey && !wakeKey.trim()) { setWakeMsg("Paste your Picovoice AccessKey first."); return; }
     }
     configureWake(on, wakeKey);
     if (wakeKey.trim()) { setHasKey(true); setWakeKey(""); }
     setWakeOn(on);
-    if (on) setWakeMsg("Listening for the wake word. Say it, wait for the beep, then speak.");
+    if (on) setWakeMsg("Listening. Say \"Hey Chief\" (or just \"Chief\"), wait for the beep, then speak.");
   };
 
   // Re-check "open by itself" when coming back from Android settings.
@@ -179,9 +178,9 @@ export default function Settings({ profile, onSaved }: Props) {
       {companionAvailable && (
         <Card>
           <Label>Hey Chief</Label>
-          <Body muted>Say the wake word, wait for the beep, then ask: "What's next?", "Plan my day", "Call me in 10 minutes". Works with the screen off. Android shows a microphone indicator while it listens.</Body>
+          <Body muted>Say "Hey Chief" (or just "Chief"), wait for the beep, then ask: "What's next?", "Plan my day", "Call me in 10 minutes". Works with the screen off. Android shows a microphone indicator while it listens.</Body>
           {!hasKey && (
-            <TextInput style={input} value={wakeKey} onChangeText={setWakeKey} placeholder="Picovoice AccessKey" placeholderTextColor={c.muted} autoCapitalize="none" secureTextEntry />
+            <TextInput style={input} value={wakeKey} onChangeText={setWakeKey} placeholder="Picovoice AccessKey (optional)" placeholderTextColor={c.muted} autoCapitalize="none" secureTextEntry />
           )}
           {hasKey && <Body style={{ color: c.done }}>AccessKey saved on this phone.</Body>}
           <Row style={{ justifyContent: "space-between" }}>
@@ -192,7 +191,7 @@ export default function Settings({ profile, onSaved }: Props) {
           {wakeOn && live && (
             <View style={{ gap: space.xs }}>
               <Body style={{ color: live.listening ? c.done : c.slip, fontWeight: "700" }}>
-                {live.listening ? "● Listening now" : live.paused ? "Paused while you talk to Chief" : "○ Not listening"}
+                {live.listening ? `● Listening now${live.engine === "porcupine" ? " (Picovoice)" : ""}` : live.paused ? "Paused while you talk to Chief" : "○ Not listening"}
               </Body>
               {!live.listening && !live.paused && (
                 <Body muted>Not listening. Tap Restart listening; if it keeps stopping, allow Chief to run without battery limits.</Body>

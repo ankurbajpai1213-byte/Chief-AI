@@ -18,3 +18,9 @@ dependencies {
   // On-device wake word engine for "Hey Chief".
   implementation 'ai.picovoice:porcupine-android:3.+'
 }
+
+dependencies {
+  // Open-source, on-device speech recognition used for the wake word when no Picovoice key is set.
+  implementation 'com.alphacephei:vosk-android:0.3.47@aar'
+  implementation 'net.java.dev.jna:jna:5.13.0@aar'
+}
