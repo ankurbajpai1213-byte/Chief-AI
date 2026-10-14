@@ -3,7 +3,7 @@
     "name": "Chief",
     "slug": "chief",
     "scheme": "chief",
-    "version": "0.5.0",
+    "version": "0.5.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "xyz.chief.app",
-      "versionCode": 10,
+      "versionCode": 11,
       "adaptiveIcon": {
         "backgroundColor": "#152238",
         "foregroundImage": "./assets/android-icon-foreground.png",

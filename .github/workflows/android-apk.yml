@@ -67,7 +67,7 @@ jobs:
 
       - name: Build APK
         working-directory: mobile/android
-        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
 
       - name: Name the APK
         run: |
