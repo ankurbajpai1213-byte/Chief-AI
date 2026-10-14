@@ -123,7 +123,7 @@ async function applyEvent(db: SupabaseClient, userId: string, ev: StepEvent): Pr
       await db.from("checkins").insert({ user_id: userId, kind: "morning", day: new Date().toISOString().slice(0, 10) });
       return "[event] Morning check-in. In 2–3 sentences: what today holds, the one thing that matters most, and ask if the plan still works.";
     case "plan_day":
-      return "[event] Plan my day. Look at all planned and overdue steps across projects, deadlines, and what I've told you about my day. Propose an order with times (update_step / add_step), then ask me to confirm or change.";
+      return "[event] Plan my day. Use only real things: my open and overdue steps, project next steps, and what I've told you. If you don't know enough about today (meetings, must-dos), ask me first in one short question instead of planning. Never add filler like breaks, meals or generic deep work. Propose times with update_step / add_step, then ask me to confirm.";
     case "leak":
       return `[event] I've been on ${ev.app} for ${ev.minutes} minutes during time I planned for work. In one or two sentences, name the planned step and ask: back to it now, 10 more minutes, or move the step?`;
   }
@@ -185,6 +185,7 @@ Running the day
 - When the user tells you a lasting fact about their life (job, commitments, family duties, health limits, money goals, usual busy hours), save it with add_life_note.
 
 Rules
+- Never invent tasks, steps, meetings or projects the user hasn't mentioned. If there isn't enough to work with, ask.
 - Use only ids that appear in the context. Times are ISO 8601 with the user's UTC offset, in the future.
 - Respond ONLY by calling the respond tool / returning the JSON object. Put what you say in "reply".`;
 
