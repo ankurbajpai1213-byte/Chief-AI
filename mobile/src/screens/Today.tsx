@@ -6,11 +6,11 @@ import type { ChiefReply, Step } from "../types";
 import { space, useColors } from "../theme";
 import { Body, Button, Card, Empty, fmtDay, fmtTime, H1, Label, Row } from "../ui";
 
-type Props = { refreshKey: number; thinking: boolean; ask: (p: Promise<ChiefReply>) => Promise<void> };
+type Props = { refreshKey: number; thinking: boolean; ask: (p: Promise<ChiefReply>) => Promise<void>; onStartConversation: () => void };
 
 const startOfDay = (d = new Date()) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 
-export default function Today({ refreshKey, thinking, ask }: Props) {
+export default function Today({ refreshKey, thinking, ask, onStartConversation }: Props) {
   const c = useColors();
   const [today, setToday] = useState<Step[]>([]);
   const [overdue, setOverdue] = useState<Step[]>([]);
@@ -75,7 +75,7 @@ export default function Today({ refreshKey, thinking, ask }: Props) {
 
       <Row>
         <Button title="Plan my day" filled busy={thinking} onPress={() => ask(sendEvent({ type: "plan_day" }))} />
-        <Button title="Morning brief" tone="plain" disabled={thinking} onPress={() => ask(sendEvent({ type: "morning_checkin" }))} />
+        <Button title="Talk it through" tone="plain" disabled={thinking} onPress={onStartConversation} />
       </Row>
 
       {overdue.length > 0 && <Label style={{ color: c.slip }}>Still open from earlier</Label>}

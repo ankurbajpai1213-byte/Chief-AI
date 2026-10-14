@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from "expo-notifications";
@@ -7,8 +7,9 @@ import * as Speech from "expo-speech";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./src/supabase";
 import { sendEvent } from "./src/api";
-import { ACTION_DONE, ACTION_LATER, ACTION_SMALLER, rescheduleAll, setupNotifications } from "./src/notify";
-import type { ChiefReply, Profile, Tab } from "./src/types";
+import { ACTION_DONE, ACTION_LATER, ACTION_SMALLER, rescheduleAll, scheduleFollowUp, setupNotifications } from "./src/notify";
+import type { ChiefEvent, ChiefReply, Profile, Tab } from "./src/types";
+import { configureMorning } from "./modules/chief-companion";
 import { useColors } from "./src/theme";
 import Login from "./src/screens/Login";
 import Talk from "./src/screens/Talk";
@@ -16,6 +17,9 @@ import Today from "./src/screens/Today";
 import Checkin from "./src/screens/Checkin";
 import Projects from "./src/screens/Projects";
 import Settings from "./src/screens/Settings";
+import Conversation from "./src/screens/Conversation";
+
+const isMorningUrl = (url: string | null) => !!url && url.startsWith("chief://morning");
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "talk", label: "Talk" },
@@ -25,7 +29,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "settings", label: "Settings" },
 ];
 
-function Main({ session }: { session: Session }) {
+function Main({ session, startMorning, onMorningHandled }: { session: Session; startMorning: boolean; onMorningHandled: () => void }) {
   const c = useColors();
   const [tab, setTab] = useState<Tab>("talk");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -33,11 +37,17 @@ function Main({ session }: { session: Session }) {
   const [thinking, setThinking] = useState(false);
   const [quick, setQuick] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [conversation, setConversation] = useState<ChiefEvent | null>(null);
   const voiceOn = useRef(true);
 
   const loadProfile = useCallback(async () => {
     const { data } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
-    if (data) { setProfile(data as Profile); voiceOn.current = (data as Profile).voice_replies; }
+    if (data) {
+      const p = data as Profile;
+      setProfile(p);
+      voiceOn.current = p.voice_replies;
+      try { configureMorning(p.morning_auto, p.wake_time.slice(0, 5)); } catch { /* not available on this device */ }
+    }
   }, [session.user.id]);
 
   const refresh = useCallback(async () => {
@@ -73,6 +83,11 @@ function Main({ session }: { session: Session }) {
     setupNotifications().then(() => rescheduleAll()).catch(() => {});
   }, [loadProfile]);
 
+  // Opened by the morning unlock.
+  useEffect(() => {
+    if (startMorning) { setConversation({ type: "morning_start" }); onMorningHandled(); }
+  }, [startMorning, onMorningHandled]);
+
   // Notification taps and buttons.
   const handled = useRef<string | null>(null);
   const lastResponse = Notifications.useLastNotificationResponse();
@@ -89,7 +104,9 @@ function Main({ session }: { session: Session }) {
       else if (action === ACTION_SMALLER) ask(sendEvent({ type: "step_smaller", step_id: data.step_id }));
       else setTab("today");
     } else if (data.kind === "morning") {
-      ask(sendEvent({ type: "morning_checkin" }));
+      setConversation({ type: "morning_start" });
+    } else if (data.kind === "followup") {
+      setConversation({ type: "followup" });
     } else if (data.kind === "evening") {
       setTab("checkin");
     }
@@ -108,7 +125,7 @@ function Main({ session }: { session: Session }) {
       )}
       <View style={{ flex: 1 }}>
         {tab === "talk" && <Talk {...props} quickReplies={quick} />}
-        {tab === "today" && <Today {...props} />}
+        {tab === "today" && <Today {...props} onStartConversation={() => setConversation({ type: "morning_start" })} />}
         {tab === "checkin" && <Checkin {...props} />}
         {tab === "projects" && <Projects {...props} maxActive={profile?.max_active_projects ?? 3} onLocalChange={refresh} />}
         {tab === "settings" && <Settings profile={profile} onSaved={async () => { await loadProfile(); await refresh(); }} />}
@@ -124,6 +141,14 @@ function Main({ session }: { session: Session }) {
           );
         })}
       </SafeAreaView>
+      {conversation && (
+        <Conversation
+          start={conversation}
+          onClose={() => { setConversation(null); refresh(); }}
+          onChanged={() => setRefreshKey((k) => k + 1)}
+          onFollowUp={(at) => { scheduleFollowUp(at).catch(() => {}); }}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -131,6 +156,13 @@ function Main({ session }: { session: Session }) {
 export default function App() {
   const c = useColors();
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [morning, setMorning] = useState(false);
+
+  useEffect(() => {
+    Linking.getInitialURL().then((u) => { if (isMorningUrl(u)) setMorning(true); }).catch(() => {});
+    const sub = Linking.addEventListener("url", ({ url }) => { if (isMorningUrl(url)) setMorning(true); });
+    return () => sub.remove();
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -145,7 +177,7 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="auto" />
       <View style={{ flex: 1, backgroundColor: c.bg }}>
-        {session === undefined ? null : session ? <Main key={session.user.id} session={session} /> : <Login />}
+        {session === undefined ? null : session ? <Main key={session.user.id} session={session} startMorning={morning} onMorningHandled={() => setMorning(false)} /> : <Login />}
       </View>
     </SafeAreaProvider>
   );

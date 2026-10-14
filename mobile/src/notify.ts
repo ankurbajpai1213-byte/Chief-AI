@@ -55,7 +55,13 @@ export async function rescheduleAll(): Promise<number> {
       .order("scheduled_at").limit(60).returns<Step[]>(),
   ]);
 
-  await Notifications.cancelAllScheduledNotificationsAsync();
+  // Rebuild everything except follow-ups Chief promised in a conversation.
+  const existing = await Notifications.getAllScheduledNotificationsAsync();
+  for (const n of existing) {
+    if ((n.content.data as { kind?: string } | null)?.kind !== "followup") {
+      await Notifications.cancelScheduledNotificationAsync(n.identifier);
+    }
+  }
   let count = 0;
 
   for (const s of steps ?? []) {
@@ -74,7 +80,7 @@ export async function rescheduleAll(): Promise<number> {
 
   if (profile) {
     await Notifications.scheduleNotificationAsync({
-      content: { title: "Good morning", body: "Chief has your plan for today. Tap to review.", data: { kind: "morning" } },
+      content: { title: "Morning check-in", body: "Tap to go through today with Chief.", data: { kind: "morning" } },
       trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...hm(profile.morning_checkin), channelId: CHANNEL },
     });
     await Notifications.scheduleNotificationAsync({
@@ -83,4 +89,14 @@ export async function rescheduleAll(): Promise<number> {
     });
   }
   return count;
+}
+
+// Chief said "I'll come back to you at…": remind at that time and reopen the conversation.
+export async function scheduleFollowUp(at: string) {
+  const when = new Date(at);
+  if (Number.isNaN(when.getTime()) || when.getTime() < Date.now() + 30000) return;
+  await Notifications.scheduleNotificationAsync({
+    content: { title: "Chief, as promised", body: "Ready to go through your day? Tap to talk.", data: { kind: "followup" } },
+    trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when, channelId: CHANNEL },
+  });
 }

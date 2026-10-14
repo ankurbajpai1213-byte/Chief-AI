@@ -17,7 +17,10 @@ type StepEvent =
   | { type: "evening_checkin"; results: { step_id: string; done: boolean; reason?: string }[]; extra?: string }
   | { type: "morning_checkin" }
   | { type: "plan_day" }
-  | { type: "leak"; app: string; minutes: number };
+  | { type: "leak"; app: string; minutes: number }
+  | { type: "morning_start" }
+  | { type: "no_answer" }
+  | { type: "followup"; about?: string };
 
 type Body = { kind: "chat"; text: string } | { kind: "event"; event: StepEvent };
 
@@ -29,7 +32,7 @@ type Action =
   | { type: "add_life_note"; area: string; content: string }
   | { type: "update_settings"; display_name?: string; morning_checkin?: string; evening_checkin?: string; max_active_projects?: number; tone?: string; voice_replies?: boolean };
 
-type Brain = { reply: string; quick_replies?: string[]; actions?: Action[] };
+type Brain = { reply: string; quick_replies?: string[]; actions?: Action[]; done?: boolean; follow_up_at?: string | null };
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...CORS, "Content-Type": "application/json" } });
@@ -65,7 +68,14 @@ Deno.serve(async (req) => {
     if (notes.length) reply += (reply ? NL + NL : "") + notes.join(" ");
     await db.from("messages").insert({ user_id: userId, role: "chief", content: reply });
 
-    return json({ reply, quick_replies: (brain.quick_replies ?? []).slice(0, 4), changed: (brain.actions ?? []).length > 0 || body.kind === "event" });
+    const followUp = brain.follow_up_at && !Number.isNaN(Date.parse(brain.follow_up_at)) && Date.parse(brain.follow_up_at) > Date.now() ? new Date(brain.follow_up_at).toISOString() : null;
+    return json({
+      reply,
+      quick_replies: (brain.quick_replies ?? []).slice(0, 4),
+      changed: (brain.actions ?? []).length > 0 || body.kind === "event",
+      done: !!brain.done,
+      follow_up_at: followUp,
+    });
   } catch (e) {
     console.error(e);
     return json({ error: e instanceof Error ? e.message : "Something went wrong." }, 500);
@@ -124,6 +134,14 @@ async function applyEvent(db: SupabaseClient, userId: string, ev: StepEvent): Pr
       return "[event] Morning check-in. In 2–3 sentences: what today holds, the one thing that matters most, and ask if the plan still works.";
     case "plan_day":
       return "[event] Plan my day. Use only real things: my open and overdue steps, project next steps, and what I've told you. If you don't know enough about today (meetings, must-dos), ask me first in one short question instead of planning. Never add filler like breaks, meals or generic deep work. Propose times with update_step / add_step, then ask me to confirm.";
+    case "morning_start": {
+      await db.from("checkins").insert({ user_id: userId, kind: "morning", day: new Date().toISOString().slice(0, 10) });
+      return "[event] CONVERSATION MODE, morning. I just unlocked my phone for the first time today. Greet me by name if you know it and ask how I slept. One question only.";
+    }
+    case "no_answer":
+      return "[event] CONVERSATION MODE: I didn't answer your last question (no speech for several seconds). Don't repeat it. Move on to the next useful question, or if I've missed two in a row, end politely: say I can tap Chief anytime, and set done=true.";
+    case "followup":
+      return `[event] CONVERSATION MODE: you asked to come back to me now${ev.about ? ` about: ${ev.about}` : ""}. Pick up from there in one or two sentences.`;
     case "leak":
       return `[event] I've been on ${ev.app} for ${ev.minutes} minutes during time I planned for work. In one or two sentences, name the planned step and ask: back to it now, 10 more minutes, or move the step?`;
   }
@@ -184,6 +202,12 @@ Running the day
 - If a step has been postponed 3+ times, name the pattern and ask what is really stopping them. Offer a 10-minute version or parking.
 - When the user tells you a lasting fact about their life (job, commitments, family duties, health limits, money goals, usual busy hours), save it with add_life_note.
 
+Conversation mode (hands-free, spoken; marked CONVERSATION MODE)
+- The user is not looking at the screen. One short question at a time, then wait. No lists.
+- Morning flow: greet and ask how they slept → briefly react → ask: review today's plan now, or later? → if later, ask what time and set follow_up_at to that time (ISO), confirm, and set done=true → if now, say today's real steps in one sentence, ask about meetings or must-dos you don't know about, schedule them, then ask if anything else; when they're finished, set done=true.
+- Save lasting facts they mention with add_life_note. Never plan with invented tasks.
+- Outside conversation mode, leave done=false and follow_up_at=null.
+
 Rules
 - Never invent tasks, steps, meetings or projects the user hasn't mentioned. If there isn't enough to work with, ask.
 - Use only ids that appear in the context. Times are ISO 8601 with the user's UTC offset, in the future.
@@ -193,6 +217,8 @@ const SCHEMA = {
   type: "object",
   properties: {
     reply: { type: "string", description: "What Chief says. Short, spoken-friendly." },
+    done: { type: "boolean", description: "Conversation mode only: true when the conversation is finished." },
+    follow_up_at: { type: ["string", "null"], description: "Conversation mode only: ISO time to come back to the user, if they asked for later." },
     quick_replies: { type: "array", items: { type: "string" }, description: "Up to 4 short tap-to-answer options." },
     actions: {
       type: "array",

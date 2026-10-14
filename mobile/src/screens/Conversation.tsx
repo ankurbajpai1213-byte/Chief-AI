@@ -1,0 +1,178 @@
+import React, { useEffect, useRef, useState } from "react";
+import { Animated, Easing, Pressable, StyleSheet, Text, View } from "react-native";
+import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from "expo-audio";
+import * as Speech from "expo-speech";
+import { sayToChief, sendEvent, transcribe } from "../api";
+import type { ChiefEvent, ChiefReply } from "../types";
+import { radius, space, useColors } from "../theme";
+
+// A hands-free conversation: Chief speaks, then listens; silence moves things along.
+// Started by the morning unlock, a follow-up reminder, or the user.
+
+type Phase = "thinking" | "speaking" | "listening" | "hearing" | "ended";
+
+type Props = {
+  start: ChiefEvent;
+  onClose: () => void;
+  onChanged: () => void;
+  onFollowUp: (at: string) => void;
+};
+
+const WAIT_FOR_SPEECH_MS = 7000; // how long Chief waits for an answer
+const END_OF_SPEECH_MS = 1600;   // pause that means "I'm done talking"
+const MAX_ANSWER_MS = 30000;
+
+const speak = (text: string) =>
+  new Promise<void>((resolve) => {
+    Speech.stop();
+    Speech.speak(text, { language: "en-IN", onDone: () => resolve(), onStopped: () => resolve(), onError: () => resolve() });
+  });
+
+export default function Conversation({ start, onClose, onChanged, onFollowUp }: Props) {
+  const c = useColors();
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const [phase, setPhase] = useState<Phase>("thinking");
+  const [line, setLine] = useState("");
+  const [heard, setHeard] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const alive = useRef(true);
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+
+  // Record until the person stops talking. Returns null if they never started.
+  const listen = async (): Promise<string | null> => {
+    const { granted } = await AudioModule.requestRecordingPermissionsAsync();
+    if (!granted) throw new Error("Chief needs the microphone. Allow it in Android settings.");
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+    await recorder.prepareToRecordAsync();
+    recorder.record();
+
+    const startedAt = Date.now();
+    let baseline: number | null = null;
+    let spoke = false;
+    let lastLoud = 0;
+    let metered = false;
+
+    await new Promise<void>((resolve) => {
+      const tick = setInterval(() => {
+        if (!alive.current) { clearInterval(tick); resolve(); return; }
+        const now = Date.now();
+        const level = recorder.getStatus().metering;
+        if (typeof level === "number" && Number.isFinite(level)) {
+          metered = true;
+          if (now - startedAt < 500) baseline = baseline === null ? level : Math.min(baseline, level);
+          const threshold = Math.max((baseline ?? -60) + 12, -45);
+          if (level > threshold) { spoke = true; lastLoud = now; }
+        }
+        const waitedTooLong = !spoke && now - startedAt > WAIT_FOR_SPEECH_MS;
+        const finished = spoke && now - lastLoud > END_OF_SPEECH_MS;
+        // Without level readings, fall back to a fixed 6-second answer window.
+        const noMeter = !metered && now - startedAt > 6000;
+        if (waitedTooLong || finished || noMeter || now - startedAt > MAX_ANSWER_MS) { clearInterval(tick); resolve(); }
+      }, 150);
+    });
+
+    await recorder.stop();
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+    if (metered && !spoke) return null;
+    if (!recorder.uri || !alive.current) return null;
+    setPhase("hearing");
+    const text = (await transcribe(recorder.uri)).trim();
+    return text.length > 1 ? text : null;
+  };
+
+  useEffect(() => {
+    alive.current = true;
+    const run = async () => {
+      let next: Promise<ChiefReply> = sendEvent(start);
+      let silentTurns = 0;
+      try {
+        while (alive.current) {
+          setPhase("thinking");
+          const r = await next;
+          if (!alive.current) return;
+          if (r.changed) onChanged();
+          if (r.follow_up_at) onFollowUp(r.follow_up_at);
+          setLine(r.reply);
+          setHeard("");
+          setPhase("speaking");
+          await speak(r.reply);
+          if (!alive.current || r.done) break;
+          setPhase("listening");
+          const answer = await listen();
+          if (!alive.current) return;
+          if (answer) {
+            silentTurns = 0;
+            setHeard(answer);
+            next = sayToChief(answer);
+          } else {
+            silentTurns++;
+            if (silentTurns >= 3) break; // safety net if Chief keeps asking into silence
+            next = sendEvent({ type: "no_answer" });
+          }
+        }
+      } catch (e) {
+        if (alive.current) setError(e instanceof Error ? e.message : "Something went wrong.");
+      }
+      if (alive.current) setPhase("ended");
+    };
+    run();
+    return () => {
+      alive.current = false;
+      Speech.stop();
+      recorder.stop().catch(() => {});
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const close = () => {
+    alive.current = false;
+    Speech.stop();
+    onClose();
+  };
+
+  const label: Record<Phase, string> = {
+    thinking: "Chief is thinking…",
+    speaking: "Chief is speaking",
+    listening: "Listening… just talk",
+    hearing: "Got it…",
+    ended: "That's all for now",
+  };
+  const orbColor = phase === "listening" ? c.you : phase === "ended" ? c.done : c.chief;
+  const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, phase === "listening" || phase === "speaking" ? 1.12 : 1.04] });
+
+  return (
+    <View style={[s.wrap, { backgroundColor: c.bg }]}>
+      <Text style={[s.kicker, { color: c.muted }]}>CHIEF</Text>
+      <View style={s.center}>
+        <Animated.View style={[s.orb, { backgroundColor: orbColor, transform: [{ scale }] }]} />
+        <Text style={[s.state, { color: c.muted }]}>{label[phase]}</Text>
+        {!!line && <Text style={[s.line, { color: c.ink }]}>{line}</Text>}
+        {!!heard && <Text style={[s.heard, { color: c.you }]}>You: {heard}</Text>}
+        {error && <Text style={[s.heard, { color: c.slip }]}>{error}</Text>}
+      </View>
+      <Pressable onPress={close} accessibilityRole="button" style={[s.close, { borderColor: c.line, backgroundColor: c.surface }]}>
+        <Text style={{ color: c.ink, fontWeight: "700", fontSize: 16 }}>{phase === "ended" ? "Close" : "Stop"}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const s = StyleSheet.create({
+  wrap: { ...StyleSheet.absoluteFill, paddingHorizontal: space.xl, paddingTop: 56, paddingBottom: 40, zIndex: 10 },
+  kicker: { fontSize: 12, letterSpacing: 2, fontWeight: "800", textAlign: "center" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.lg },
+  orb: { width: 140, height: 140, borderRadius: 70, opacity: 0.9 },
+  state: { fontSize: 13, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" },
+  line: { fontSize: 22, lineHeight: 30, fontWeight: "600", textAlign: "center" },
+  heard: { fontSize: 15, textAlign: "center" },
+  close: { borderWidth: 1.5, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center" },
+});

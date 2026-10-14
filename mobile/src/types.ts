@@ -8,6 +8,8 @@ export type Profile = {
   tone: string;
   language: string;
   voice_replies: boolean;
+  wake_time: string; // "06:00:00"
+  morning_auto: boolean;
 };
 
 export type Project = {
@@ -45,8 +47,11 @@ export type ChiefEvent =
   | { type: "step_smaller"; step_id: string }
   | { type: "evening_checkin"; results: { step_id: string; done: boolean; reason?: string }[]; extra?: string }
   | { type: "morning_checkin" }
-  | { type: "plan_day" };
+  | { type: "plan_day" }
+  | { type: "morning_start" }
+  | { type: "no_answer" }
+  | { type: "followup"; about?: string };
 
-export type ChiefReply = { reply: string; quick_replies: string[]; changed: boolean };
+export type ChiefReply = { reply: string; quick_replies: string[]; changed: boolean; done?: boolean; follow_up_at?: string | null };
 
 export type Tab = "talk" | "today" | "checkin" | "projects" | "settings";
