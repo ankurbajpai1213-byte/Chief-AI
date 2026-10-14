@@ -20,8 +20,15 @@ Deno.serve(async (req) => {
     const key = Deno.env.get("OPENAI_API_KEY");
     if (!key) return json({ error: "Voice isn't connected yet. Type for now." }, 503);
 
-    const form = await req.formData();
-    const file = form.get("file");
+    let file: FormDataEntryValue | null;
+    if ((req.headers.get("content-type") ?? "").includes("application/json")) {
+      const { audio_base64, filename } = await req.json();
+      if (!audio_base64) return json({ error: "No recording received." }, 400);
+      const bytes = Uint8Array.from(atob(audio_base64), (ch) => ch.charCodeAt(0));
+      file = new File([bytes], filename || "voice.m4a", { type: "audio/mp4" });
+    } else {
+      file = (await req.formData()).get("file");
+    }
     if (!(file instanceof File)) return json({ error: "No recording received." }, 400);
     if (file.size > 20 * 1024 * 1024) return json({ error: "That recording is too long." }, 413);
 

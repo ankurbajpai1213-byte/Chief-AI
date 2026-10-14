@@ -1,3 +1,5 @@
+import { fetch as expoFetch } from "expo/fetch";
+import { File } from "expo-file-system";
 import { supabase, SUPABASE_URL, SUPABASE_KEY } from "./supabase";
 import type { ChiefEvent, ChiefReply } from "./types";
 
@@ -26,14 +28,23 @@ export async function transcribe(uri: string): Promise<string> {
   const { data: s } = await supabase.auth.getSession();
   const token = s.session?.access_token;
   if (!token) throw new Error("Please sign in again.");
-  const form = new FormData();
-  // React Native's FormData accepts a file descriptor object.
-  form.append("file", { uri, name: "voice.m4a", type: "audio/m4a" } as unknown as Blob);
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/transcribe`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_KEY },
-    body: form,
-  });
+  const headers = { Authorization: `Bearer ${token}`, apikey: SUPABASE_KEY };
+  const url = `${SUPABASE_URL}/functions/v1/transcribe`;
+  const file = new File(uri);
+  let res: Awaited<ReturnType<typeof expoFetch>>;
+  try {
+    // expo-file-system's File is a real Blob, which expo/fetch can upload.
+    const form = new FormData();
+    form.append("file", file, "voice.m4a");
+    res = await expoFetch(url, { method: "POST", headers, body: form });
+  } catch {
+    // Fallback: send the recording as base64 text.
+    res = await expoFetch(url, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ audio_base64: await file.base64(), filename: "voice.m4a" }),
+    });
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? "Couldn't hear that. Try again or type.");
   return body.text ?? "";
