@@ -3,6 +3,7 @@ import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable,
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder, useAudioRecorderState } from "expo-audio";
 import { supabase } from "../supabase";
 import { sayToChief, transcribe } from "../api";
+import { pauseWake, resumeWake } from "../../modules/chief-companion";
 import type { ChiefReply, Message } from "../types";
 import { radius, space, useColors } from "../theme";
 import { Body, Button, Label, Row } from "../ui";
@@ -72,6 +73,7 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
       try {
         const { granted } = await AudioModule.requestRecordingPermissionsAsync();
         if (!granted) { setHint("Allow microphone access in Android settings to talk to Chief."); return false; }
+        pauseWake();
         await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
         await recorder.prepareToRecordAsync();
         recorder.record();
@@ -96,6 +98,7 @@ export default function Talk({ refreshKey, thinking, quickReplies, ask }: Props)
       await recorder.stop();
       await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
     } catch { /* already stopped */ }
+    resumeWake();
     if (held < 700) { setHint("Tap the mic and start talking. Chief sends when you pause."); return; }
     const uri = recorder.uri;
     if (!uri) return;

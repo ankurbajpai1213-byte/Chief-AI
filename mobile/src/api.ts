@@ -24,7 +24,7 @@ async function callChief(body: object): Promise<ChiefReply> {
   return data as ChiefReply;
 }
 
-export const sayToChief = (text: string) => callChief({ kind: "chat", text });
+export const sayToChief = (text: string, voice = false) => callChief({ kind: "chat", text, voice });
 export const sendEvent = (event: ChiefEvent) => callChief({ kind: "event", event });
 
 export async function transcribe(uri: string): Promise<string> {

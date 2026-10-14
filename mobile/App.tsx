@@ -17,9 +17,11 @@ import Today from "./src/screens/Today";
 import Checkin from "./src/screens/Checkin";
 import Projects from "./src/screens/Projects";
 import Settings from "./src/screens/Settings";
-import Conversation from "./src/screens/Conversation";
+import Conversation, { type ConversationStart } from "./src/screens/Conversation";
 
-const isMorningUrl = (url: string | null) => !!url && url.startsWith("chief://morning");
+type Launch = "morning" | "wake" | null;
+const launchFromUrl = (url: string | null): Launch =>
+  !url ? null : url.startsWith("chief://morning") ? "morning" : url.startsWith("chief://wake") ? "wake" : null;
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "talk", label: "Talk" },
@@ -29,7 +31,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "settings", label: "Settings" },
 ];
 
-function Main({ session, startMorning, onMorningHandled }: { session: Session; startMorning: boolean; onMorningHandled: () => void }) {
+function Main({ session, launch, onLaunchHandled }: { session: Session; launch: Launch; onLaunchHandled: () => void }) {
   const c = useColors();
   const [tab, setTab] = useState<Tab>("talk");
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -37,7 +39,7 @@ function Main({ session, startMorning, onMorningHandled }: { session: Session; s
   const [thinking, setThinking] = useState(false);
   const [quick, setQuick] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [conversation, setConversation] = useState<ChiefEvent | null>(null);
+  const [conversation, setConversation] = useState<ConversationStart | null>(null);
   const voiceOn = useRef(true);
 
   const loadProfile = useCallback(async () => {
@@ -85,8 +87,10 @@ function Main({ session, startMorning, onMorningHandled }: { session: Session; s
 
   // Opened by the morning unlock.
   useEffect(() => {
-    if (startMorning) { setConversation({ type: "morning_start" }); onMorningHandled(); }
-  }, [startMorning, onMorningHandled]);
+    if (launch === "morning") setConversation({ type: "morning_start" });
+    if (launch === "wake") setConversation({ type: "wake" });
+    if (launch) onLaunchHandled();
+  }, [launch, onLaunchHandled]);
 
   // Notification taps and buttons.
   const handled = useRef<string | null>(null);
@@ -143,10 +147,12 @@ function Main({ session, startMorning, onMorningHandled }: { session: Session; s
       </SafeAreaView>
       {conversation && (
         <Conversation
+          key={JSON.stringify(conversation)}
           start={conversation}
+          name={profile?.display_name}
           onClose={() => { setConversation(null); refresh(); }}
           onChanged={() => setRefreshKey((k) => k + 1)}
-          onFollowUp={(at) => { scheduleFollowUp(at).catch(() => {}); }}
+          onFollowUp={(at) => { scheduleFollowUp(at, profile?.display_name).catch(() => {}); }}
         />
       )}
     </SafeAreaView>
@@ -156,11 +162,11 @@ function Main({ session, startMorning, onMorningHandled }: { session: Session; s
 export default function App() {
   const c = useColors();
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const [morning, setMorning] = useState(false);
+  const [launch, setLaunch] = useState<Launch>(null);
 
   useEffect(() => {
-    Linking.getInitialURL().then((u) => { if (isMorningUrl(u)) setMorning(true); }).catch(() => {});
-    const sub = Linking.addEventListener("url", ({ url }) => { if (isMorningUrl(url)) setMorning(true); });
+    Linking.getInitialURL().then((u) => setLaunch(launchFromUrl(u))).catch(() => {});
+    const sub = Linking.addEventListener("url", ({ url }) => { const l = launchFromUrl(url); if (l) setLaunch(l); });
     return () => sub.remove();
   }, []);
 
@@ -177,7 +183,7 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="auto" />
       <View style={{ flex: 1, backgroundColor: c.bg }}>
-        {session === undefined ? null : session ? <Main key={session.user.id} session={session} startMorning={morning} onMorningHandled={() => setMorning(false)} /> : <Login />}
+        {session === undefined ? null : session ? <Main key={session.user.id} session={session} launch={launch} onLaunchHandled={() => setLaunch(null)} /> : <Login />}
       </View>
     </SafeAreaProvider>
   );

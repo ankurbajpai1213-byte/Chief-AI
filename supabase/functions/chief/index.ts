@@ -26,7 +26,7 @@ type StepEvent =
 
 type CalEvent = { title: string; start: string; end: string; all_day?: boolean };
 
-type Body = ({ kind: "chat"; text: string } | { kind: "event"; event: StepEvent }) & { calendar?: CalEvent[] };
+type Body = ({ kind: "chat"; text: string } | { kind: "event"; event: StepEvent }) & { calendar?: CalEvent[]; voice?: boolean };
 
 type Action =
   | { type: "create_project"; title: string; why?: string; outcome?: string; goal_type?: string; hours_per_week?: number; deadline?: string | null; milestones?: string[]; first_step?: { title: string; minutes?: number; scheduled_at?: string | null } }
@@ -59,7 +59,7 @@ Deno.serve(async (req) => {
       const text = (body.text ?? "").trim().slice(0, 4000);
       if (!text) return json({ error: "Say or type something first." }, 400);
       await db.from("messages").insert({ user_id: userId, role: "user", content: text });
-      userTurn = text;
+      userTurn = body.voice ? `CONVERSATION MODE (spoken, hands-free): ${text}` : text;
     } else {
       userTurn = await applyEvent(db, userId, body.event);
       await db.from("messages").insert({ user_id: userId, role: "event", content: userTurn });
@@ -228,6 +228,8 @@ Conversation mode (hands-free, spoken; marked CONVERSATION MODE)
 - The user is not looking at the screen. One short question at a time, then wait. No lists.
 - Morning flow: greet and ask how they slept → briefly react → ask: review today's plan now, or later? → if later, ask what time and set follow_up_at to that time (ISO), confirm, and set done=true → if now, say today's real steps in one sentence, ask about meetings or must-dos you don't know about, schedule them, then ask if anything else; when they're finished, set done=true.
 - Save lasting facts they mention with add_life_note. Never plan with invented tasks.
+- After "Hey Chief" the user asks for one thing (what's next, plan my day, remind me…). Answer it in one or two spoken sentences, ask "Anything else?" only if useful, and set done=true when they're finished.
+- "Call me / remind me in N minutes" (e.g. to escape a meeting): set follow_up_at to that time and confirm. Chief will ring them then.
 - Outside conversation mode, leave done=false and follow_up_at=null.
 
 Plans need approval

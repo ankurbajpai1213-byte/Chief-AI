@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { AppState, ScrollView, Switch, TextInput, View } from "react-native";
 import { calendarEnabled, setCalendarEnabled } from "../calendar";
-import { canOpenByItself, companionAvailable, openOpenByItselfSettings, resetMorningToday } from "../../modules/chief-companion";
+import {
+  canOpenByItself, companionAvailable, configureWake, openOpenByItselfSettings, resetMorningToday,
+  sayNow, setSpeak, speakEnabled, wakeStatus,
+} from "../../modules/chief-companion";
+import { AudioModule } from "expo-audio";
 import { supabase } from "../supabase";
 import type { LifeNote, Profile } from "../types";
 import { radius, space, useColors } from "../theme";
@@ -26,6 +30,11 @@ export default function Settings({ profile, onSaved }: Props) {
   const [wake, setWake] = useState("06:00");
   const [canOpen, setCanOpen] = useState(false);
   const [useCal, setUseCal] = useState(false);
+  const [wakeOn, setWakeOn] = useState(false);
+  const [hasKey, setHasKey] = useState(false);
+  const [wakeKey, setWakeKey] = useState("");
+  const [speak, setSpeakState] = useState(true);
+  const [wakeMsg, setWakeMsg] = useState<string | null>(null);
   const [calMsg, setCalMsg] = useState<string | null>(null);
   const [notes, setNotes] = useState<LifeNote[]>([]);
   const [area, setArea] = useState("work");
@@ -46,6 +55,25 @@ export default function Settings({ profile, onSaved }: Props) {
   }, [profile]);
 
   useEffect(() => { calendarEnabled().then(setUseCal); }, []);
+  useEffect(() => {
+    const st = wakeStatus();
+    setWakeOn(st.on);
+    setHasKey(st.hasKey);
+    setSpeakState(speakEnabled());
+  }, []);
+
+  const toggleWake = async (on: boolean) => {
+    setWakeMsg(null);
+    if (on) {
+      const { granted } = await AudioModule.requestRecordingPermissionsAsync();
+      if (!granted) { setWakeMsg("Chief needs the microphone to hear \"Hey Chief\"."); return; }
+      if (!hasKey && !wakeKey.trim()) { setWakeMsg("Paste your Picovoice AccessKey first."); return; }
+    }
+    configureWake(on, wakeKey);
+    if (wakeKey.trim()) { setHasKey(true); setWakeKey(""); }
+    setWakeOn(on);
+    if (on) setWakeMsg("Listening for the wake word. Say it, wait for the beep, then speak.");
+  };
 
   // Re-check "open by itself" when coming back from Android settings.
   useEffect(() => {
@@ -136,6 +164,27 @@ export default function Settings({ profile, onSaved }: Props) {
           <Body muted>Android shows a small "Chief is ready for your morning" notification while this is on.</Body>
           <Button title="Rehearse tomorrow's start today" tone="plain" small onPress={() => { resetMorningToday(); setMsg({ text: "Lock your phone, then unlock it. Chief should start about a minute later (only after your wake time)." }); }} />
           <Button title="Save" filled busy={saving} onPress={save} />
+        </Card>
+      )}
+
+      {companionAvailable && (
+        <Card>
+          <Label>Hey Chief</Label>
+          <Body muted>Say the wake word, wait for the beep, then ask: "What's next?", "Plan my day", "Call me in 10 minutes". Works with the screen off. Android shows a microphone indicator while it listens.</Body>
+          {!hasKey && (
+            <TextInput style={input} value={wakeKey} onChangeText={setWakeKey} placeholder="Picovoice AccessKey" placeholderTextColor={c.muted} autoCapitalize="none" secureTextEntry />
+          )}
+          {hasKey && <Body style={{ color: c.done }}>AccessKey saved on this phone.</Body>}
+          <Row style={{ justifyContent: "space-between" }}>
+            <Body>Listen for "Hey Chief"</Body>
+            <Switch value={wakeOn} onValueChange={toggleWake} trackColor={{ true: c.chief, false: c.line }} />
+          </Row>
+          {wakeMsg && <Body style={{ color: wakeMsg.startsWith("Listening") ? c.done : c.slip }}>{wakeMsg}</Body>}
+          <Row style={{ justifyContent: "space-between" }}>
+            <Body>Say reminders out loud (not on silent)</Body>
+            <Switch value={speak} onValueChange={(on) => { setSpeak(on); setSpeakState(on); }} trackColor={{ true: c.chief, false: c.line }} />
+          </Row>
+          <Button title="Test Chief's voice" tone="plain" small onPress={() => sayNow(`Hey ${name || "there"}, this is how I'll remind you.`)} />
         </Card>
       )}
 

@@ -3,6 +3,7 @@ import { Animated, Easing, Pressable, StyleSheet, Text, View } from "react-nativ
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from "expo-audio";
 import * as Speech from "expo-speech";
 import { sayToChief, sendEvent, transcribe } from "../api";
+import { pauseWake, resumeWake } from "../../modules/chief-companion";
 import type { ChiefEvent, ChiefReply } from "../types";
 import { radius, space, useColors } from "../theme";
 
@@ -11,8 +12,11 @@ import { radius, space, useColors } from "../theme";
 
 type Phase = "thinking" | "speaking" | "listening" | "hearing" | "ended";
 
+export type ConversationStart = ChiefEvent | { type: "wake" };
+
 type Props = {
-  start: ChiefEvent;
+  start: ConversationStart;
+  name?: string | null;
   onClose: () => void;
   onChanged: () => void;
   onFollowUp: (at: string) => void;
@@ -28,7 +32,7 @@ const speak = (text: string) =>
     Speech.speak(text, { language: "en-IN", onDone: () => resolve(), onStopped: () => resolve(), onError: () => resolve() });
   });
 
-export default function Conversation({ start, onClose, onChanged, onFollowUp }: Props) {
+export default function Conversation({ start, name, onClose, onChanged, onFollowUp }: Props) {
   const c = useColors();
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const [phase, setPhase] = useState<Phase>("thinking");
@@ -91,10 +95,27 @@ export default function Conversation({ start, onClose, onChanged, onFollowUp }: 
 
   useEffect(() => {
     alive.current = true;
+    pauseWake(); // free the microphone from "Hey Chief" while we talk
     const run = async () => {
-      let next: Promise<ChiefReply> = sendEvent(start);
+      let next: Promise<ChiefReply>;
       let silentTurns = 0;
       try {
+        if (start.type === "wake") {
+          // "Hey Chief": answer at once, then listen for the request.
+          const hello = name ? `Yes, ${name}?` : "Yes?";
+          setLine(hello);
+          setPhase("speaking");
+          await speak(hello);
+          if (!alive.current) return;
+          setPhase("listening");
+          const first = await listen();
+          if (!alive.current) return;
+          if (!first) { setPhase("ended"); setTimeout(() => alive.current && onClose(), 1500); return; }
+          setHeard(first);
+          next = sayToChief(first, true);
+        } else {
+          next = sendEvent(start);
+        }
         while (alive.current) {
           setPhase("thinking");
           const r = await next;
@@ -112,7 +133,7 @@ export default function Conversation({ start, onClose, onChanged, onFollowUp }: 
           if (answer) {
             silentTurns = 0;
             setHeard(answer);
-            next = sayToChief(answer);
+            next = sayToChief(answer, true);
           } else {
             silentTurns++;
             if (silentTurns >= 3) break; // safety net if Chief keeps asking into silence
@@ -129,6 +150,7 @@ export default function Conversation({ start, onClose, onChanged, onFollowUp }: 
       alive.current = false;
       Speech.stop();
       recorder.stop().catch(() => {});
+      resumeWake();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

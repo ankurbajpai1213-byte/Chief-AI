@@ -1,5 +1,9 @@
 package xyz.chief.companion
 
+import ai.picovoice.porcupine.Porcupine
+import ai.picovoice.porcupine.PorcupineManager
+import android.Manifest
+import android.app.AlarmManager
 import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -10,7 +14,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -18,7 +25,13 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
+import android.util.Log
+import org.json.JSONArray
 import java.util.Calendar
+import java.util.Locale
+
+private const val TAG = "ChiefCompanion"
 
 /** Settings shared between the app and the background service. */
 class Prefs(context: Context) {
@@ -38,16 +51,38 @@ class Prefs(context: Context) {
   var lastDay: String
     get() = sp.getString("lastDay", "") ?: ""
     set(v) = sp.edit().putString("lastDay", v).apply()
+  var wakeWordOn: Boolean
+    get() = sp.getBoolean("wakeWordOn", false)
+    set(v) = sp.edit().putBoolean("wakeWordOn", v).apply()
+  var accessKey: String
+    get() = sp.getString("accessKey", "") ?: ""
+    set(v) = sp.edit().putString("accessKey", v).apply()
+  var speakOn: Boolean
+    get() = sp.getBoolean("speakOn", true)
+    set(v) = sp.edit().putBoolean("speakOn", v).apply()
+  var announcementCount: Int
+    get() = sp.getInt("announcementCount", 0)
+    set(v) = sp.edit().putInt("announcementCount", v).apply()
+
+  /** The service should run if any feature needs it. */
+  val needsService: Boolean get() = enabled || wakeWordOn || speakOn
 }
 
 /**
- * Runs quietly in the background. On the first unlock after wake time (once a day),
- * waits a short delay and opens Chief's morning conversation.
+ * Chief's always-on helper:
+ *  - morning start after the first unlock past wake time,
+ *  - "Hey Chief" wake word,
+ *  - speaking reminders out loud at their time (unless the phone is silent).
  */
-class CompanionService : Service() {
+class CompanionService : Service(), TextToSpeech.OnInitListener {
   private val handler = Handler(Looper.getMainLooper())
   private var pending: Runnable? = null
   private var registered = false
+  private var porcupine: PorcupineManager? = null
+  private var wakePaused = false
+  private var tts: TextToSpeech? = null
+  private var ttsReady = false
+  private val ttsQueue = ArrayList<String>()
 
   private val receiver = object : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
@@ -63,15 +98,7 @@ class CompanionService : Service() {
   override fun onCreate() {
     super.onCreate()
     ensureChannels(this)
-    val notification = buildNotification(
-      this, SERVICE_CHANNEL, "Chief is ready for your morning",
-      "Chief will start your day after you unlock your phone.", ongoing = true, contentUri = null,
-    )
-    if (Build.VERSION.SDK_INT >= 34) {
-      startForeground(SERVICE_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-    } else {
-      startForeground(SERVICE_ID, notification)
-    }
+    goForeground()
     val filter = IntentFilter().apply {
       addAction(Intent.ACTION_USER_PRESENT)
       addAction(Intent.ACTION_SCREEN_OFF)
@@ -81,14 +108,111 @@ class CompanionService : Service() {
     registered = true
   }
 
-  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+  private fun micAllowed(): Boolean =
+    checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+  private fun goForeground() {
+    val p = Prefs(this)
+    val text = when {
+      p.wakeWordOn && p.accessKey.isNotBlank() -> "Listening for \"Hey Chief\"."
+      p.enabled -> "Chief will start your day after you unlock your phone."
+      else -> "Chief will speak your reminders."
+    }
+    val n = buildNotification(this, SERVICE_CHANNEL, "Chief is with you", text, ongoing = true, contentUri = null)
+    if (Build.VERSION.SDK_INT >= 34) {
+      val wantMic = p.wakeWordOn && micAllowed()
+      try {
+        val type = if (wantMic) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                   else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        startForeground(SERVICE_ID, n, type)
+      } catch (e: Exception) {
+        // Android refuses microphone use when started from the background; the app retries when opened.
+        Log.w(TAG, "microphone foreground refused: ${e.message}")
+        startForeground(SERVICE_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+      }
+    } else if (Build.VERSION.SDK_INT >= 29) {
+      startForeground(SERVICE_ID, n)
+    } else {
+      startForeground(SERVICE_ID, n)
+    }
+  }
+
+  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    when (intent?.action) {
+      ACTION_REFRESH -> { goForeground(); restartWakeWord() }
+      ACTION_PAUSE_WAKE -> { wakePaused = true; stopWakeWord() }
+      ACTION_RESUME_WAKE -> { wakePaused = false; restartWakeWord() }
+      ACTION_ANNOUNCE -> intent.getStringExtra(EXTRA_TEXT)?.let { speak(it) }
+      else -> restartWakeWord()
+    }
+    if (!Prefs(this).needsService) stopSelf()
+    return START_STICKY
+  }
 
   override fun onDestroy() {
     cancelPending()
+    stopWakeWord()
+    tts?.shutdown()
     if (registered) unregisterReceiver(receiver)
     registered = false
     super.onDestroy()
   }
+
+  // ---------- wake word ----------
+
+  private fun restartWakeWord() {
+    stopWakeWord()
+    val p = Prefs(this)
+    if (!p.wakeWordOn || wakePaused || p.accessKey.isBlank() || !micAllowed()) return
+    try {
+      val builder = PorcupineManager.Builder().setAccessKey(p.accessKey).setSensitivity(0.6f)
+      val custom = try { assets.list("")?.contains(KEYWORD_FILE) == true } catch (_: Exception) { false }
+      if (custom) builder.setKeywordPath(KEYWORD_FILE) else builder.setKeyword(Porcupine.BuiltInKeyword.PORCUPINE)
+      porcupine = builder.build(applicationContext) { _ -> handler.post { onWakeWord() } }
+      porcupine?.start()
+      Log.i(TAG, "wake word listening (custom=$custom)")
+    } catch (e: Exception) {
+      Log.e(TAG, "wake word failed to start: ${e.message}")
+      porcupine = null
+    }
+  }
+
+  private fun stopWakeWord() {
+    try { porcupine?.stop() } catch (_: Exception) {}
+    try { porcupine?.delete() } catch (_: Exception) {}
+    porcupine = null
+  }
+
+  private fun onWakeWord() {
+    // Release the microphone so the app can listen to the request.
+    wakePaused = true
+    stopWakeWord()
+    try { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80).startTone(ToneGenerator.TONE_PROP_ACK, 150) } catch (_: Exception) {}
+    launchChief(this, WAKE_URI, "Chief is listening", "Tap to talk to Chief.")
+    // Safety net: if the app never resumes us, start listening again in 2 minutes.
+    handler.postDelayed({ if (wakePaused) { wakePaused = false; restartWakeWord() } }, 120_000)
+  }
+
+  // ---------- speaking reminders ----------
+
+  override fun onInit(status: Int) {
+    ttsReady = status == TextToSpeech.SUCCESS
+    if (ttsReady) {
+      tts?.language = Locale("en", "IN")
+      ttsQueue.forEach { tts?.speak(it, TextToSpeech.QUEUE_ADD, null, "chief-${System.nanoTime()}") }
+    }
+    ttsQueue.clear()
+  }
+
+  private fun speak(text: String) {
+    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    if (am.ringerMode != AudioManager.RINGER_MODE_NORMAL) return // silent or vibrate: stay quiet
+    if (tts == null) tts = TextToSpeech(this, this)
+    if (ttsReady) tts?.speak(text, TextToSpeech.QUEUE_ADD, null, "chief-${System.nanoTime()}")
+    else ttsQueue.add(text)
+  }
+
+  // ---------- morning start ----------
 
   private fun cancelPending() {
     pending?.let { handler.removeCallbacks(it) }
@@ -103,7 +227,6 @@ class CompanionService : Service() {
     if (p.lastDay == today) return
     val minutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
     val wake = p.wakeHour * 60 + p.wakeMinute
-    // Only in the morning window: from wake time until 6 hours later.
     if (minutes < wake || minutes > wake + 6 * 60) return
 
     cancelPending()
@@ -113,7 +236,7 @@ class CompanionService : Service() {
       val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
       if (!pm.isInteractive || km.isKeyguardLocked) return@Runnable
       p.lastDay = today
-      launchChief(this)
+      launchChief(this, MORNING_URI, "Good morning", "Tap to start your day with Chief.")
     }
     pending = run
     handler.postDelayed(run, p.delaySeconds.coerceIn(0, 600) * 1000L)
@@ -125,10 +248,22 @@ class CompanionService : Service() {
     const val SERVICE_ID = 4101
     const val MORNING_ID = 4102
     const val MORNING_URI = "chief://morning"
+    const val WAKE_URI = "chief://wake"
+    const val KEYWORD_FILE = "hey-chief_android.ppn"
+    const val ACTION_REFRESH = "xyz.chief.companion.REFRESH"
+    const val ACTION_PAUSE_WAKE = "xyz.chief.companion.PAUSE_WAKE"
+    const val ACTION_RESUME_WAKE = "xyz.chief.companion.RESUME_WAKE"
+    const val ACTION_ANNOUNCE = "xyz.chief.companion.ANNOUNCE"
+    const val EXTRA_TEXT = "text"
 
-    fun start(ctx: Context) {
-      val i = Intent(ctx, CompanionService::class.java)
-      if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
+    fun send(ctx: Context, action: String, text: String? = null) {
+      val i = Intent(ctx, CompanionService::class.java).setAction(action)
+      if (text != null) i.putExtra(EXTRA_TEXT, text)
+      try {
+        if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
+      } catch (e: Exception) {
+        Log.w(TAG, "could not reach service: ${e.message}")
+      }
     }
 
     fun stop(ctx: Context) {
@@ -136,8 +271,8 @@ class CompanionService : Service() {
     }
 
     /** Open Chief directly when allowed; otherwise post a notification to tap. */
-    fun launchChief(ctx: Context) {
-      val open = Intent(Intent.ACTION_VIEW, Uri.parse(MORNING_URI))
+    fun launchChief(ctx: Context, uri: String, title: String, text: String) {
+      val open = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
         .setPackage(ctx.packageName)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
       val canOpen = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(ctx)
@@ -148,7 +283,7 @@ class CompanionService : Service() {
         } catch (_: Exception) { /* fall back to a notification */ }
       }
       ensureChannels(ctx)
-      val n = buildNotification(ctx, MORNING_CHANNEL, "Good morning", "Tap to start your day with Chief.", ongoing = false, contentUri = MORNING_URI)
+      val n = buildNotification(ctx, MORNING_CHANNEL, title, text, ongoing = false, contentUri = uri)
       (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(MORNING_ID, n)
     }
 
@@ -159,7 +294,7 @@ class CompanionService : Service() {
         nm.createNotificationChannel(NotificationChannel(SERVICE_CHANNEL, "Chief in the background", NotificationManager.IMPORTANCE_MIN))
       }
       if (nm.getNotificationChannel(MORNING_CHANNEL) == null) {
-        nm.createNotificationChannel(NotificationChannel(MORNING_CHANNEL, "Morning with Chief", NotificationManager.IMPORTANCE_HIGH))
+        nm.createNotificationChannel(NotificationChannel(MORNING_CHANNEL, "Chief wants to talk", NotificationManager.IMPORTANCE_HIGH))
       }
     }
 
@@ -172,7 +307,7 @@ class CompanionService : Service() {
         ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
       }
       val pi = tap?.let {
-        PendingIntent.getActivity(ctx, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        PendingIntent.getActivity(ctx, contentUri.hashCode(), it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
       }
       @Suppress("DEPRECATION")
       val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(ctx, channel) else Notification.Builder(ctx)
@@ -180,14 +315,51 @@ class CompanionService : Service() {
       if (pi != null) b.setContentIntent(pi)
       return b.build()
     }
+
+    /** Replace all spoken reminders with a new list of [epochMillis, text]. */
+    fun scheduleAnnouncements(ctx: Context, json: String) {
+      val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+      val p = Prefs(ctx)
+      for (i in 0 until p.announcementCount) {
+        am.cancel(announcePI(ctx, i, null))
+      }
+      val list = try { JSONArray(json) } catch (_: Exception) { JSONArray() }
+      var n = 0
+      val now = System.currentTimeMillis()
+      for (i in 0 until minOf(list.length(), 60)) {
+        val item = list.optJSONObject(i) ?: continue
+        val at = item.optLong("at", 0L)
+        val text = item.optString("text", "")
+        if (at <= now || text.isBlank()) continue
+        val pi = announcePI(ctx, n, text)
+        val exact = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()
+        if (exact) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        n++
+      }
+      p.announcementCount = n
+    }
+
+    private fun announcePI(ctx: Context, index: Int, text: String?): PendingIntent {
+      val i = Intent(ctx, AnnounceReceiver::class.java).setAction("xyz.chief.companion.ANNOUNCE_$index")
+      if (text != null) i.putExtra(EXTRA_TEXT, text)
+      return PendingIntent.getBroadcast(ctx, 7000 + index, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
+  }
+}
+
+/** Fires at a reminder's time and asks the service to say it out loud. */
+class AnnounceReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent) {
+    val text = intent.getStringExtra(CompanionService.EXTRA_TEXT) ?: return
+    if (!Prefs(context).speakOn) return
+    CompanionService.send(context, CompanionService.ACTION_ANNOUNCE, text)
   }
 }
 
 /** Restarts the background service after a reboot or an app update. */
 class BootReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
-    if (Prefs(context).enabled) {
-      try { CompanionService.start(context) } catch (_: Exception) { /* Android may refuse; the app restarts it on next open */ }
-    }
+    if (Prefs(context).needsService) CompanionService.send(context, CompanionService.ACTION_REFRESH)
   }
 }

@@ -4,12 +4,17 @@ plugins {
 }
 
 group = 'xyz.chief'
-version = '0.1.0'
+version = '0.2.0'
 
 android {
   namespace "xyz.chief.companion"
   defaultConfig {
-    versionCode 1
-    versionName "0.1.0"
+    versionCode 2
+    versionName "0.2.0"
   }
+}
+
+dependencies {
+  // On-device wake word engine for "Hey Chief".
+  implementation 'ai.picovoice:porcupine-android:3.+'
 }

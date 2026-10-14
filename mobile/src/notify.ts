@@ -1,6 +1,9 @@
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
+import { upcomingEvents } from "./calendar";
+import { setAnnouncements } from "../modules/chief-companion";
 import type { Profile, Step } from "./types";
 
 export const CHANNEL = "chief";
@@ -88,13 +91,44 @@ export async function rescheduleAll(): Promise<number> {
       trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...hm(profile.evening_checkin), channelId: CHANNEL },
     });
   }
+  // Chief also says reminders out loud at their time (the phone stays quiet when on silent).
+  try {
+    const name = profile?.display_name ? `${profile.display_name}, ` : "";
+    const items: { at: number; text: string }[] = [];
+    for (const s of steps ?? []) {
+      if (s.scheduled_at) items.push({ at: Date.parse(s.scheduled_at), text: `Hey ${name}it's time for ${s.title}.` });
+    }
+    for (const e of await upcomingEvents(2)) {
+      if (e.all_day) continue;
+      const at = Date.parse(e.start) - 10 * 60000;
+      const when = new Date(e.start).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      items.push({ at, text: `Hey ${name}${e.title} starts at ${when}, in ten minutes.` });
+    }
+    for (const f of await loadFollowUps()) items.push(f);
+    setAnnouncements(items.filter((i) => i.at > Date.now()).sort((a, b) => a.at - b.at).slice(0, 60));
+  } catch { /* speaking is optional */ }
   return count;
 }
 
+const FOLLOWUPS = "chief.followups";
+async function loadFollowUps(): Promise<{ at: number; text: string }[]> {
+  try {
+    const list = JSON.parse((await AsyncStorage.getItem(FOLLOWUPS)) ?? "[]") as { at: number; text: string }[];
+    const live = list.filter((f) => f.at > Date.now());
+    if (live.length !== list.length) await AsyncStorage.setItem(FOLLOWUPS, JSON.stringify(live));
+    return live;
+  } catch { return []; }
+}
+
 // Chief said "I'll come back to you at…": remind at that time and reopen the conversation.
-export async function scheduleFollowUp(at: string) {
+export async function scheduleFollowUp(at: string, name?: string | null) {
   const when = new Date(at);
   if (Number.isNaN(when.getTime()) || when.getTime() < Date.now() + 30000) return;
+  // Spoken too: this is how "call me in 10 minutes" rings.
+  const list = await loadFollowUps();
+  list.push({ at: when.getTime(), text: `${name ? name + ", " : ""}it's Chief. You asked me to come back to you now.` });
+  await AsyncStorage.setItem(FOLLOWUPS, JSON.stringify(list));
+  rescheduleAll().catch(() => {});
   await Notifications.scheduleNotificationAsync({
     content: { title: "Chief, as promised", body: "Ready to go through your day? Tap to talk.", data: { kind: "followup" } },
     trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: when, channelId: CHANNEL },
