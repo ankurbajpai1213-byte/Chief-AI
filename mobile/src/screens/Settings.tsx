@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { AppState, ScrollView, Switch, TextInput, View } from "react-native";
-import { calendarEnabled, setCalendarEnabled } from "../calendar";
+import { calendarEnabled, checkCalendar, setCalendarEnabled } from "../calendar";
 import {
   canOpenByItself, companionAvailable, configureWake, openOpenByItselfSettings, resetMorningToday,
   sayNow, setSpeak, speakEnabled, wakeStatus, refreshCompanion, openBatterySettings, type WakeStatus,
@@ -195,8 +195,9 @@ export default function Settings({ profile, onSaved }: Props) {
                 {live.listening ? "● Listening now" : live.paused ? "Paused while you talk to Chief" : "○ Not listening"}
               </Body>
               {!live.listening && !live.paused && (
-                <Body muted>Android stopped the microphone. Tap Restart listening; if it keeps stopping, allow Chief to run without battery limits.</Body>
+                <Body muted>Not listening. Tap Restart listening; if it keeps stopping, allow Chief to run without battery limits.</Body>
               )}
+              {!!live.lastError && <Body style={{ color: c.slip }}>Reason: {live.lastError}</Body>}
               <Row>
                 <Button title="Restart listening" small onPress={() => { refreshCompanion(); setTimeout(() => setLive(wakeStatus()), 1500); }} />
                 {!live.batteryUnrestricted && <Button title="Remove battery limits" tone="plain" small onPress={() => openBatterySettings()} />}
@@ -226,7 +227,16 @@ export default function Settings({ profile, onSaved }: Props) {
             }}
           />
         </Row>
-        {calMsg && <Body style={{ color: c.slip }}>{calMsg}</Body>}
+        {calMsg && <Body style={{ color: calMsg.startsWith("✓") ? c.done : c.slip }}>{calMsg}</Body>}
+        {useCal && (
+          <Button title="Check what Chief can see" tone="plain" small onPress={async () => {
+            const r = await checkCalendar(2);
+            if (r.error) setCalMsg(`Couldn't read the calendar: ${r.error}`);
+            else if (!r.permission) setCalMsg("Calendar permission is off. Allow it in Android settings → Apps → Chief → Permissions.");
+            else if (!r.calendars) setCalMsg("No calendars found on this phone. Make sure Google Calendar is synced to this phone.");
+            else setCalMsg(`✓ ${r.calendars} calendars, ${r.events.length} events today and tomorrow${r.events[0] ? ` (first: ${r.events[0].title})` : ""}.`);
+          }} />
+        )}
       </Card>
 
       <Card>

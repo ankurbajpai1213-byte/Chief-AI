@@ -55,6 +55,7 @@ class ChiefCompanionModule : Module() {
         "micAllowedInBackground" to (live["micAllowedInBackground"] ?: false),
         "paused" to (live["paused"] ?: false),
         "batteryUnrestricted" to batteryUnrestricted(),
+        "lastError" to p.lastError,
       )
     }
 

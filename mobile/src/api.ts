@@ -1,7 +1,7 @@
 import { fetch as expoFetch } from "expo/fetch";
 import { File } from "expo-file-system";
 import { supabase, SUPABASE_URL, SUPABASE_KEY } from "./supabase";
-import { upcomingEvents } from "./calendar";
+import { checkCalendar } from "./calendar";
 import type { ChiefEvent, ChiefReply } from "./types";
 
 async function errorMessage(e: unknown): Promise<string> {
@@ -18,8 +18,9 @@ async function errorMessage(e: unknown): Promise<string> {
 
 async function callChief(body: object): Promise<ChiefReply> {
   // Chief always sees today's and tomorrow's calendar, if the user turned it on.
-  const calendar = await upcomingEvents(2);
-  const { data, error } = await supabase.functions.invoke("chief", { body: { ...body, calendar } });
+  const cal = await checkCalendar(2).catch(() => null);
+  const calendar_status = !cal || !cal.enabled ? "off" : cal.permission ? "connected" : "no_permission";
+  const { data, error } = await supabase.functions.invoke("chief", { body: { ...body, calendar: cal?.events ?? [], calendar_status } });
   if (error) throw new Error(await errorMessage(error));
   return data as ChiefReply;
 }

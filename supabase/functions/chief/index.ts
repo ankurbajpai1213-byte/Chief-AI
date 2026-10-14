@@ -26,7 +26,7 @@ type StepEvent =
 
 type CalEvent = { title: string; start: string; end: string; all_day?: boolean };
 
-type Body = ({ kind: "chat"; text: string } | { kind: "event"; event: StepEvent }) & { calendar?: CalEvent[]; voice?: boolean };
+type Body = ({ kind: "chat"; text: string } | { kind: "event"; event: StepEvent }) & { calendar?: CalEvent[]; calendar_status?: "off" | "connected" | "no_permission"; voice?: boolean };
 
 type Action =
   | { type: "create_project"; title: string; why?: string; outcome?: string; goal_type?: string; hours_per_week?: number; deadline?: string | null; milestones?: string[]; first_step?: { title: string; minutes?: number; scheduled_at?: string | null } }
@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
 
     const calendar = (body.calendar ?? []).slice(0, 80).map((e) => ({ title: String(e.title ?? "").slice(0, 120), start: e.start, end: e.end, all_day: !!e.all_day }));
     const context = await loadContext(db, userId);
-    const brain = await think(context, userTurn, calendar);
+    const brain = await think(context, userTurn, calendar, body.calendar_status ?? (calendar.length ? "connected" : "off"));
     // What the user has actually said: steps without a project must trace back to this.
     const evidence = [
       ...context.history.filter((m) => m.role === "user").map((m) => m.content),
@@ -239,6 +239,7 @@ Plans need approval
 
 What you can and can't do
 - You can: talk, plan, add/move/finish steps, manage projects, remember life notes, read the phone calendar when the user has turned it on in Settings.
+- The calendar comes straight from the phone (it includes Google Calendar if it syncs to the phone). There is no Google sign-in; ignore anything earlier in the conversation that suggested one.
 - You cannot: sign in to accounts, connect services, send emails or messages, make calls, or browse. Never say you are doing these. If asked, say it isn't possible from chat yet; for the calendar, point to Settings → "Use my phone's calendar".
 - Life notes are only for lasting facts about the user's life (job, routine, family, health limits, goals). Never save what happened in this chat.
 
@@ -281,7 +282,7 @@ const SCHEMA = {
   required: ["reply"],
 };
 
-async function think(ctx: Awaited<ReturnType<typeof loadContext>>, userTurn: string, calendar: CalEvent[]): Promise<Brain> {
+async function think(ctx: Awaited<ReturnType<typeof loadContext>>, userTurn: string, calendar: CalEvent[], calendarStatus: string): Promise<Brain> {
   const state = {
     now: ctx.now,
     settings: {
@@ -292,7 +293,10 @@ async function think(ctx: Awaited<ReturnType<typeof loadContext>>, userTurn: str
     life_notes: ctx.lifeNotes,
     projects: ctx.projects,
     open_steps: ctx.steps,
-    calendar_events: calendar.length ? calendar : "not connected (user can turn on 'Use my phone's calendar' in Settings)",
+    calendar_events:
+      calendarStatus === "connected" ? (calendar.length ? calendar : "connected: no events today or tomorrow")
+      : calendarStatus === "no_permission" ? "switched on, but Android calendar permission is denied (Settings → Apps → Chief → Permissions)"
+      : "off (user can turn on 'Use my phone's calendar' in Chief's Settings)",
     done_last_7_days: ctx.doneThisWeek,
   };
   const transcript = ctx.history.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join(NL);

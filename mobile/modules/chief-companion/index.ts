@@ -3,7 +3,7 @@ import { requireOptionalNativeModule } from "expo-modules-core";
 
 export type WakeStatus = {
   on: boolean; hasKey: boolean; running?: boolean; listening?: boolean;
-  micAllowedInBackground?: boolean; paused?: boolean; batteryUnrestricted?: boolean;
+  micAllowedInBackground?: boolean; paused?: boolean; batteryUnrestricted?: boolean; lastError?: string;
 };
 
 type Native = {

@@ -60,6 +60,9 @@ class Prefs(context: Context) {
   var speakOn: Boolean
     get() = sp.getBoolean("speakOn", true)
     set(v) = sp.edit().putBoolean("speakOn", v).apply()
+  var lastError: String
+    get() = sp.getString("lastError", "") ?: ""
+    set(v) = sp.edit().putString("lastError", v).apply()
   var announcementCount: Int
     get() = sp.getInt("announcementCount", 0)
     set(v) = sp.edit().putInt("announcementCount", v).apply()
@@ -131,9 +134,11 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
                    else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         micForeground = wantMic
         startForeground(SERVICE_ID, buildNotification(this, SERVICE_CHANNEL, "Chief is with you", statusText(p), ongoing = true, contentUri = null), type)
+        if (wantMic && p.lastError.startsWith("Android blocked")) p.lastError = ""
       } catch (e: Exception) {
         // Android refuses the microphone when this starts from the background (after the app was closed).
         Log.w(TAG, "microphone foreground refused: ${e.message}")
+        p.lastError = "Android blocked the microphone in the background (${e.javaClass.simpleName}). Open Chief once to re-allow it."
         micForeground = false
         startForeground(SERVICE_ID, buildNotification(this, SERVICE_CHANNEL, "Chief is with you", statusText(p), ongoing = true, contentUri = null), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
       }
@@ -191,17 +196,24 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
   private fun restartWakeWord() {
     stopWakeWord()
     val p = Prefs(this)
-    if (!p.wakeWordOn || wakePaused || p.accessKey.isBlank() || !micAllowed()) return
-    if (!micForeground) { Log.w(TAG, "wake word needs the app opened once to get microphone access"); return }
+    if (!p.wakeWordOn || wakePaused) return
+    if (p.accessKey.isBlank()) { p.lastError = "No Picovoice AccessKey saved."; return }
+    if (!micAllowed()) { p.lastError = "Microphone permission is off for Chief."; return }
+    if (!micForeground) {
+      if (p.lastError.isBlank()) p.lastError = "Microphone not available in the background yet. Open Chief once."
+      return
+    }
     try {
       val builder = PorcupineManager.Builder().setAccessKey(p.accessKey).setSensitivity(0.6f)
       val custom = try { assets.list("")?.contains(KEYWORD_FILE) == true } catch (_: Exception) { false }
       if (custom) builder.setKeywordPath(KEYWORD_FILE) else builder.setKeyword(Porcupine.BuiltInKeyword.PORCUPINE)
       porcupine = builder.build(applicationContext) { _ -> handler.post { onWakeWord() } }
       porcupine?.start()
+      p.lastError = ""
       Log.i(TAG, "wake word listening (custom=$custom)")
     } catch (e: Exception) {
       Log.e(TAG, "wake word failed to start: ${e.message}")
+      p.lastError = "${e.javaClass.simpleName}: ${e.message ?: "wake word engine failed to start"}"
       porcupine = null
     }
   }
