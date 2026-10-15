@@ -43,6 +43,7 @@ class VoskWake(
         val model = loadModel(context)
         if (stopped) return@execute
         val rec = Recognizer(model, SAMPLE_RATE, GRAMMAR)
+        rec.setWords(true) // per-word confidence, so weak matches can be ignored
         val svc = SpeechService(rec, SAMPLE_RATE)
         main.post {
           if (stopped) { try { svc.shutdown() } catch (_: Throwable) {}; return@post }
@@ -67,10 +68,25 @@ class VoskWake(
 
   val running: Boolean get() = service != null
 
-  private fun check(json: String?, key: String) {
+  /**
+   * Decide on a finished utterance only (never on partial guesses, which fire on
+   * almost any speech). Accept "hey chief" anywhere, or "chief" said on its own,
+   * and only when the recognizer is confident about every wake word.
+   */
+  private fun check(json: String?) {
     if (json.isNullOrBlank()) return
-    val text = try { JSONObject(json).optString(key, "") } catch (_: Exception) { "" }
-    if (!text.split(" ").contains("chief")) return
+    val words = try {
+      val arr = JSONObject(json).optJSONArray("result") ?: return
+      (0 until arr.length()).map { arr.getJSONObject(it) }.map { it.optString("word") to it.optDouble("conf", 0.0) }
+    } catch (_: Exception) { return }
+    val spoken = words.filter { it.first != "[unk]" }
+    val i = spoken.indexOfFirst { it.first == "chief" }
+    if (i < 0) return
+    val chiefConf = spoken[i].second
+    val hey = i > 0 && spoken[i - 1].first == "hey" && spoken[i - 1].second >= MIN_CONF
+    val alone = words.size == 1
+    val ok = (hey && chiefConf >= MIN_CONF) || (alone && chiefConf >= MIN_CONF_ALONE)
+    if (!ok) { Log.i(TAG, "wake ignored: $words"); return }
     val now = System.currentTimeMillis()
     if (now - lastFired < 4000) return
     lastFired = now
@@ -78,9 +94,9 @@ class VoskWake(
   }
 
   private val listener = object : RecognitionListener {
-    override fun onPartialResult(hypothesis: String?) = check(hypothesis, "partial")
-    override fun onResult(hypothesis: String?) = check(hypothesis, "text")
-    override fun onFinalResult(hypothesis: String?) = check(hypothesis, "text")
+    override fun onPartialResult(hypothesis: String?) { /* too eager to trust */ }
+    override fun onResult(hypothesis: String?) = check(hypothesis)
+    override fun onFinalResult(hypothesis: String?) = check(hypothesis)
     override fun onError(exception: Exception?) { onError("Vosk: ${exception?.message ?: "listening error"}") }
     override fun onTimeout() { /* keep listening */ }
   }
@@ -88,8 +104,11 @@ class VoskWake(
   companion object {
     private const val TAG = "ChiefCompanion"
     private const val SAMPLE_RATE = 16000f
-    // Only these phrases are recognised; "[unk]" absorbs all other speech.
-    private const val GRAMMAR = "[\"hey chief\", \"chief\", \"[unk]\"]"
+    // Only these words are recognised. The look-alikes soak up everyday speech that
+    // would otherwise be forced onto "chief"; "[unk]" absorbs everything else.
+    private const val GRAMMAR = "[\"hey chief\", \"chief\", \"hey\", \"chef\", \"cheap\", \"sheep\", \"chip\", \"cheese\", \"teeth\", \"leaf\", \"beef\", \"keep\", \"she\", \"each\", \"brief\", \"thief\", \"[unk]\"]"
+    private const val MIN_CONF = 0.80
+    private const val MIN_CONF_ALONE = 0.92
     private const val MODEL_DIR = "vosk-model"
     private const val MODEL_VERSION = "small-en-us-0.15"
     private const val ZIP_ROOT = "vosk-model-small-en-us-0.15"

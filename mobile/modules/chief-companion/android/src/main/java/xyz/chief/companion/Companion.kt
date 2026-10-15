@@ -234,7 +234,19 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     vosk = null
   }
 
+  private val recentWakes = ArrayList<Long>()
+
   private fun onWakeWord() {
+    // Safety net: if it keeps waking, it's hearing the room, not you. Back off for 30 minutes.
+    val now = System.currentTimeMillis()
+    recentWakes.removeAll { now - it > 10 * 60_000 }
+    recentWakes.add(now)
+    if (recentWakes.size > 3) {
+      recentWakes.clear()
+      pauseFor(30 * 60_000)
+      Prefs(this).lastError = "Paused for 30 minutes: it woke up 4 times in 10 minutes, probably from background talk. It resumes by itself."
+      return
+    }
     // Release the microphone so the app can listen to the request.
     pauseFor(120_000)
     try { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80).startTone(ToneGenerator.TONE_PROP_ACK, 150) } catch (_: Exception) {}
