@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import expo.modules.kotlin.modules.Module
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class ChiefCompanionModule : Module() {
@@ -101,6 +102,16 @@ class ChiefCompanionModule : Module() {
       CompanionService.scheduleAnnouncements(ctx, json)
       true
     }
+    // Speak inside a conversation and resolve when finished (plays even on silent: you asked).
+    AsyncFunction("speakAndWait") { text: String, promise: Promise ->
+      Speaker.say(ctx, text) { promise.resolve(true) }
+    }
+
+    Function("stopSpeaking") {
+      Speaker.stop()
+      true
+    }
+
     Function("sayNow") { text: String ->
       CompanionService.send(ctx, CompanionService.ACTION_ANNOUNCE, text)
       true

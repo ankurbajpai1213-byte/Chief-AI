@@ -16,6 +16,8 @@ type Native = {
   pauseWake(): boolean;
   resumeWake(): boolean;
   wakeWasReal(): boolean;
+  speakAndWait(text: string): Promise<boolean>;
+  stopSpeaking(): boolean;
   setSpeak(on: boolean): boolean;
   speakEnabled(): boolean;
   setAnnouncements(json: string): boolean;
@@ -61,3 +63,10 @@ export const sayNow = (text: string) => safe(() => native?.sayNow(text), undefin
 export function setAnnouncements(items: { at: number; text: string }[]) {
   return safe(() => native?.setAnnouncements(JSON.stringify(items)) ?? false, false);
 }
+
+// Chief's voice in a conversation (Android's own speech engine). Resolves when finished.
+export async function speakAndWait(text: string): Promise<boolean> {
+  if (!native) return false;
+  try { return await native.speakAndWait(text); } catch { return false; }
+}
+export const stopSpeaking = () => safe(() => native?.stopSpeaking(), undefined);

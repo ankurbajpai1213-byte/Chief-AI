@@ -3,7 +3,7 @@ import { Animated, Easing, Pressable, StyleSheet, Text, View } from "react-nativ
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from "expo-audio";
 import * as Speech from "expo-speech";
 import { sayToChief, sendEvent, transcribe } from "../api";
-import { pauseWake, resumeWake, wakeWasReal } from "../../modules/chief-companion";
+import { companionAvailable, pauseWake, resumeWake, speakAndWait, stopSpeaking, wakeWasReal } from "../../modules/chief-companion";
 import type { ChiefEvent, ChiefReply } from "../types";
 import { radius, space, useColors } from "../theme";
 
@@ -33,10 +33,14 @@ const speak = (text: string) =>
     let finished = false;
     const finish = () => { if (!finished) { finished = true; clearTimeout(guard); resolve(); } };
     const guard = setTimeout(finish, 2500 + text.length * 90);
-    Speech.stop();
-    setTimeout(() => {
+    if (companionAvailable) {
+      // Android's own voice: the same one as "Test Chief's voice".
+      speakAndWait(text).then((ok) => { if (ok) finish(); else fallback(); });
+    } else fallback();
+    function fallback() {
+      Speech.stop();
       Speech.speak(text, { language: "en-IN", volume: 1.0, onDone: finish, onStopped: finish, onError: finish });
-    }, 150);
+    }
   });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -172,6 +176,7 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
     return () => {
       alive.current = false;
       Speech.stop();
+      stopSpeaking();
       recorder.stop().catch(() => {});
       clearInterval(keepPaused);
       resumeWake();
@@ -190,6 +195,7 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
   const close = () => {
     alive.current = false;
     Speech.stop();
+    stopSpeaking();
     onClose();
   };
 
