@@ -64,6 +64,11 @@ class ChiefCompanionModule : Module() {
       CompanionService.instance?.pauseFor(90_000) ?: CompanionService.send(ctx, CompanionService.ACTION_PAUSE_WAKE)
       true
     }
+    Function("wakeWasReal") {
+      CompanionService.instance?.wakeWasReal()
+      true
+    }
+
     Function("resumeWake") {
       CompanionService.instance?.resumeNow() ?: CompanionService.send(ctx, CompanionService.ACTION_RESUME_WAKE)
       true

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { AppState, ScrollView, Switch, TextInput, View } from "react-native";
 import { calendarEnabled, checkCalendar, setCalendarEnabled } from "../calendar";
 import {
+  resumeWake,
   canOpenByItself, companionAvailable, configureWake, openOpenByItselfSettings, resetMorningToday,
   sayNow, setSpeak, speakEnabled, wakeStatus, refreshCompanion, openBatterySettings, type WakeStatus,
 } from "../../modules/chief-companion";
@@ -198,7 +199,7 @@ export default function Settings({ profile, onSaved }: Props) {
               )}
               {!!live.lastError && <Body style={{ color: c.slip }}>Reason: {live.lastError}</Body>}
               <Row>
-                <Button title="Restart listening" small onPress={() => { refreshCompanion(); setTimeout(() => setLive(wakeStatus()), 1500); }} />
+                <Button title="Restart listening" small onPress={() => { resumeWake(); refreshCompanion(); setTimeout(() => setLive(wakeStatus()), 1500); }} />
                 {!live.batteryUnrestricted && <Button title="Remove battery limits" tone="plain" small onPress={() => openBatterySettings()} />}
               </Row>
             </View>

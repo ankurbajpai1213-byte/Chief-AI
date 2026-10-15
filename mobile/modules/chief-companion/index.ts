@@ -15,6 +15,7 @@ type Native = {
   openBatterySettings(): boolean;
   pauseWake(): boolean;
   resumeWake(): boolean;
+  wakeWasReal(): boolean;
   setSpeak(on: boolean): boolean;
   speakEnabled(): boolean;
   setAnnouncements(json: string): boolean;
@@ -51,6 +52,7 @@ export const batteryUnrestricted = () => safe(() => native?.batteryUnrestricted(
 export const openBatterySettings = () => safe(() => native?.openBatterySettings(), undefined);
 export const pauseWake = () => safe(() => native?.pauseWake(), undefined);
 export const resumeWake = () => safe(() => native?.resumeWake(), undefined);
+export const wakeWasReal = () => safe(() => native?.wakeWasReal(), undefined);
 
 // Spoken reminders
 export const setSpeak = (on: boolean) => safe(() => native?.setSpeak(on) ?? false, false);

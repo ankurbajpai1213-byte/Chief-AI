@@ -157,9 +157,14 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     handler.postDelayed(resumeRunnable, ms)
   }
 
+  /** The conversation after a wake heard a real request, so that wake wasn't a false alarm. */
+  fun wakeWasReal() { if (recentWakes.isNotEmpty()) recentWakes.removeAt(recentWakes.size - 1) }
+
   fun resumeNow() {
     handler.removeCallbacks(resumeRunnable)
     wakePaused = false
+    val p = Prefs(this)
+    if (p.lastError.startsWith("Paused for 30")) p.lastError = ""
     restartWakeWord()
   }
 
@@ -244,13 +249,13 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     if (recentWakes.size > 3) {
       recentWakes.clear()
       pauseFor(30 * 60_000)
-      Prefs(this).lastError = "Paused for 30 minutes: it woke up 4 times in 10 minutes, probably from background talk. It resumes by itself."
+      Prefs(this).lastError = "Paused for 30 minutes: it woke up 4 times in 10 minutes without hearing a request after, probably background talk. Tap Restart listening to resume now."
       return
     }
     // Release the microphone so the app can listen to the request.
     pauseFor(120_000)
     try { ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80).startTone(ToneGenerator.TONE_PROP_ACK, 150) } catch (_: Exception) {}
-    launchChief(this, WAKE_URI, "Chief is listening", "Tap to talk to Chief.")
+    launchChief(this, WAKE_URI, "Chief heard you", "Tap to talk. To open by itself, turn on Settings → Morning → Allow Chief to open by itself.")
   }
 
   // ---------- speaking reminders ----------

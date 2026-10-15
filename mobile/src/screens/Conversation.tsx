@@ -3,7 +3,7 @@ import { Animated, Easing, Pressable, StyleSheet, Text, View } from "react-nativ
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioRecorder } from "expo-audio";
 import * as Speech from "expo-speech";
 import { sayToChief, sendEvent, transcribe } from "../api";
-import { pauseWake, resumeWake } from "../../modules/chief-companion";
+import { pauseWake, resumeWake, wakeWasReal } from "../../modules/chief-companion";
 import type { ChiefEvent, ChiefReply } from "../types";
 import { radius, space, useColors } from "../theme";
 
@@ -134,6 +134,7 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
             return;
           }
           setHeard(first);
+          wakeWasReal(); // you really were talking to Chief
           next = sayToChief(first, true);
         } else {
           next = sendEvent(start);
