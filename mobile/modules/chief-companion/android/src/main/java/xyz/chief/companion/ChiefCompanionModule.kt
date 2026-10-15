@@ -37,6 +37,15 @@ class ChiefCompanionModule : Module() {
     }
 
     // "Hey Chief": on/off plus the Picovoice access key (kept only on this phone).
+    // Evening check-in: Chief starts the conversation at this time (or at the next unlock within 3 hours).
+    Function("configureEvening") { on: Boolean, hour: Int, minute: Int ->
+      val p = Prefs(ctx)
+      p.eveningOn = on; p.eveningHour = hour; p.eveningMinute = minute
+      CompanionService.scheduleEvening(ctx)
+      apply()
+      true
+    }
+
     Function("configureWake") { on: Boolean, accessKey: String ->
       val p = Prefs(ctx)
       p.wakeWordOn = on

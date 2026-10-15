@@ -9,7 +9,7 @@ import { supabase } from "./src/supabase";
 import { sendEvent } from "./src/api";
 import { ACTION_DONE, ACTION_LATER, ACTION_SMALLER, rescheduleAll, scheduleFollowUp, setupNotifications } from "./src/notify";
 import type { ChiefEvent, ChiefReply, Profile, Tab } from "./src/types";
-import { configureMorning, refreshCompanion } from "./modules/chief-companion";
+import { configureEvening, configureMorning, refreshCompanion } from "./modules/chief-companion";
 import { useColors } from "./src/theme";
 import Login from "./src/screens/Login";
 import Talk from "./src/screens/Talk";
@@ -19,9 +19,9 @@ import Projects from "./src/screens/Projects";
 import Settings from "./src/screens/Settings";
 import Conversation, { type ConversationStart } from "./src/screens/Conversation";
 
-type Launch = "morning" | "wake" | null;
+type Launch = "morning" | "wake" | "evening" | null;
 const launchFromUrl = (url: string | null): Launch =>
-  !url ? null : url.startsWith("chief://morning") ? "morning" : url.startsWith("chief://wake") ? "wake" : null;
+  !url ? null : url.startsWith("chief://morning") ? "morning" : url.startsWith("chief://wake") ? "wake" : url.startsWith("chief://evening") ? "evening" : null;
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "talk", label: "Talk" },
@@ -49,6 +49,7 @@ function Main({ session, launch, onLaunchHandled }: { session: Session; launch: 
       setProfile(p);
       voiceOn.current = p.voice_replies;
       try { configureMorning(p.morning_auto, p.wake_time.slice(0, 5)); } catch { /* not available on this device */ }
+      try { if (p.evening_checkin) configureEvening(true, String(p.evening_checkin).slice(0, 5)); } catch { /* not available */ }
     }
   }, [session.user.id]);
 
@@ -97,6 +98,7 @@ function Main({ session, launch, onLaunchHandled }: { session: Session; launch: 
   useEffect(() => {
     if (launch === "morning") setConversation({ type: "morning_start" });
     if (launch === "wake") setConversation({ type: "wake" });
+    if (launch === "evening") setConversation({ type: "evening_start" });
     if (launch) onLaunchHandled();
   }, [launch, onLaunchHandled]);
 
@@ -120,7 +122,7 @@ function Main({ session, launch, onLaunchHandled }: { session: Session; launch: 
     } else if (data.kind === "followup") {
       setConversation({ type: "followup" });
     } else if (data.kind === "evening") {
-      setTab("checkin");
+      setConversation({ type: "evening_start" });
     }
     Notifications.clearLastNotificationResponseAsync().catch(() => {});
   }, [lastResponse, ask]);

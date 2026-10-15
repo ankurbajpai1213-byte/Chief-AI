@@ -19,6 +19,7 @@ type StepEvent =
   | { type: "plan_day" }
   | { type: "leak"; app: string; minutes: number }
   | { type: "morning_start" }
+  | { type: "evening_start" }
   | { type: "no_answer" }
   | { type: "followup"; about?: string }
   | { type: "approve_plan" }
@@ -67,7 +68,9 @@ Deno.serve(async (req) => {
 
     const calendar = (body.calendar ?? []).slice(0, 80).map((e) => ({ title: String(e.title ?? "").slice(0, 120), start: e.start, end: e.end, all_day: !!e.all_day }));
     const context = await loadContext(db, userId);
+    const t0 = Date.now();
     const brain = await think(context, userTurn, calendar, body.calendar_status ?? (calendar.length ? "connected" : "off"));
+    console.log(`brain_ms=${Date.now() - t0}`);
     // What the user has actually said: steps without a project must trace back to this.
     const evidence = [
       ...context.history.filter((m) => m.role === "user").map((m) => m.content),
@@ -108,7 +111,9 @@ async function applyEvent(db: SupabaseClient, userId: string, ev: StepEvent): Pr
     case "step_done": {
       const s = await step(ev.step_id);
       await db.from("steps").update({ status: "done", completed_at: new Date().toISOString() }).eq("id", s.id);
-      return `[event] I marked "${s.title}" (project: ${s.projects?.title ?? "none"}) as DONE. Give a short well-done, then propose the next step for this project with a time.`;
+      return s.project_id
+        ? `[event] I marked "${s.title}" (project: ${s.projects?.title}) as DONE. Give a short well-done, then propose the next step for this project with a time (proposed=true, in the future).`
+        : `[event] I marked "${s.title}" as DONE. Give a short well-done in one line. Do not propose or add any new step.`;
     }
     case "step_later": {
       const s = await step(ev.step_id);
@@ -152,9 +157,14 @@ async function applyEvent(db: SupabaseClient, userId: string, ev: StepEvent): Pr
       await db.from("checkins").insert({ user_id: userId, kind: "morning", day: new Date().toISOString().slice(0, 10) });
       return "[event] CONVERSATION MODE, morning. I just unlocked my phone for the first time today. Greet me by name if you know it and ask how I slept. One question only.";
     }
+    case "evening_start": {
+      await db.from("checkins").insert({ user_id: userId, kind: "evening", day: new Date().toISOString().slice(0, 10) });
+      return "[event] CONVERSATION MODE, evening check-in. Greet me by name and ask in one short question how the day went. Then go through today's planned steps (open_steps scheduled today) one at a time: 'Did you do X?'. Yes → update_step status done. No → ask briefly why, then either update_step it to a new future time or status missed. Finish by saying what's first tomorrow (or ask what is), and set done=true.";
+    }
     case "no_answer":
       return "[event] CONVERSATION MODE: I didn't answer your last question (no speech for several seconds). Don't repeat it. Move on to the next useful question, or if I've missed two in a row, end politely: say I can tap Chief anytime, and set done=true.";
     case "approve_plan": {
+      await db.from("steps").update({ status: "cancelled" }).eq("status", "proposed").lt("scheduled_at", new Date().toISOString());
       const { data } = await db.from("steps").update({ status: "planned" }).eq("status", "proposed").select("id");
       return `[event] I approved your proposed plan (${data?.length ?? 0} steps are now scheduled with reminders). Confirm in one short line.`;
     }
@@ -246,6 +256,10 @@ What you can and can't do
 Rules
 - Never invent tasks, steps, meetings or projects the user hasn't mentioned. Earlier plans in the conversation are not evidence. If there isn't enough to work with, ask.
 - Use only ids that appear in the context. Times are ISO 8601 with the user's UTC offset, in the future.
+- A time without a day means its next occurrence that is still ahead (if 14:00 today has passed, it's tomorrow). Don't ask which day.
+- When something they ask for clashes with a calendar event or another step, say so in the same reply and suggest a fix.
+- Calendar events can't be changed or deleted by you yet. If they ask to move or remove one, say plainly that it's in their phone calendar and you can't edit it yet; offer to add a Chief step instead. Never say you moved it.
+- Never claim you did something unless an action in this reply does it.
 - Respond ONLY by calling the respond tool / returning the JSON object. Put what you say in "reply".`;
 
 const SCHEMA = {
@@ -334,6 +348,8 @@ async function callOpenAI(key: string, prompt: string): Promise<Brain> {
     headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
       model: Deno.env.get("CHIEF_MODEL") ?? "gpt-5-mini",
+      // Spoken replies need speed: keep thinking short (override with CHIEF_REASONING).
+      reasoning_effort: Deno.env.get("CHIEF_REASONING") ?? "low",
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: `${SYSTEM}${NL}${NL}Return a JSON object matching this schema:${NL}${JSON.stringify(SCHEMA)}` },
@@ -389,10 +405,13 @@ async function applyActions(db: SupabaseClient, userId: string, actions: Action[
         const words = quote.split(" ").filter((w) => w.length > 2);
         const grounded = !!a.project_id || (words.length > 0 && words.filter((w) => evidence.includes(w)).length >= Math.ceil(words.length * 0.6));
         if (!grounded) { console.warn("skipped ungrounded step", a.title, a.from_user); break; }
+        // Never schedule into the past.
+        if (a.scheduled_at && Date.parse(a.scheduled_at) < Date.now() - 5 * 60000) { console.warn("skipped past step", a.title, a.scheduled_at); break; }
         await db.from("steps").insert({ user_id: userId, project_id: a.project_id || null, title: a.title, minutes: mins(a.minutes), scheduled_at: future(a.scheduled_at), status: a.proposed ? "proposed" : "planned" });
         break;
       }
       case "approve_plan":
+        await db.from("steps").update({ status: "cancelled" }).eq("status", "proposed").lt("scheduled_at", new Date().toISOString());
         await db.from("steps").update({ status: "planned" }).eq("status", "proposed");
         break;
       case "update_step": {

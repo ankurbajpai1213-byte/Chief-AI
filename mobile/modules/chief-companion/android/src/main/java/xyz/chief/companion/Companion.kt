@@ -63,12 +63,24 @@ class Prefs(context: Context) {
   var lastError: String
     get() = sp.getString("lastError", "") ?: ""
     set(v) = sp.edit().putString("lastError", v).apply()
+  var eveningOn: Boolean
+    get() = sp.getBoolean("eveningOn", false)
+    set(v) = sp.edit().putBoolean("eveningOn", v).apply()
+  var eveningHour: Int
+    get() = sp.getInt("eveningHour", 21)
+    set(v) = sp.edit().putInt("eveningHour", v).apply()
+  var eveningMinute: Int
+    get() = sp.getInt("eveningMinute", 0)
+    set(v) = sp.edit().putInt("eveningMinute", v).apply()
+  var lastEveningDay: String
+    get() = sp.getString("lastEveningDay", "") ?: ""
+    set(v) = sp.edit().putString("lastEveningDay", v).apply()
   var announcementCount: Int
     get() = sp.getInt("announcementCount", 0)
     set(v) = sp.edit().putInt("announcementCount", v).apply()
 
   /** The service should run if any feature needs it. */
-  val needsService: Boolean get() = enabled || wakeWordOn || speakOn
+  val needsService: Boolean get() = enabled || wakeWordOn || speakOn || eveningOn
 }
 
 /**
@@ -181,6 +193,7 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
       ACTION_PAUSE_WAKE -> pauseFor(90_000)
       ACTION_RESUME_WAKE -> resumeNow()
       ACTION_ANNOUNCE -> intent.getStringExtra(EXTRA_TEXT)?.let { speak(it) }
+      ACTION_EVENING -> onEveningTime()
       else -> restartWakeWord()
     }
     if (!Prefs(this).needsService) stopSelf()
@@ -285,8 +298,46 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     pending = null
   }
 
+  private fun dayKey(c: Calendar = Calendar.getInstance()) = "${c.get(Calendar.YEAR)}-${c.get(Calendar.DAY_OF_YEAR)}"
+
+  private fun phoneInUse(): Boolean {
+    val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+    return pm.isInteractive && !km.isKeyguardLocked
+  }
+
+  /** Inside the evening window (check-in time to 3 hours after) and not done today. */
+  private fun eveningDue(p: Prefs): Boolean {
+    if (!p.eveningOn || p.lastEveningDay == dayKey()) return false
+    val now = Calendar.getInstance()
+    val minutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+    val at = p.eveningHour * 60 + p.eveningMinute
+    return minutes >= at && minutes <= at + 3 * 60
+  }
+
+  private fun startEvening(p: Prefs) {
+    p.lastEveningDay = dayKey()
+    launchChief(this, EVENING_URI, "Evening check-in", "Tap to go through your day with Chief.")
+  }
+
+  /** The alarm at check-in time: talk now if the phone is in use, otherwise at the next unlock. */
+  private fun onEveningTime() {
+    val p = Prefs(this)
+    scheduleEvening(this) // tomorrow's
+    if (!eveningDue(p)) return
+    if (phoneInUse()) startEvening(p)
+    else if (p.speakOn) speak("It's time for your evening check-in. Unlock your phone and I'll go through your day.")
+  }
+
   private fun onUnlock() {
     val p = Prefs(this)
+    if (eveningDue(p)) {
+      cancelPending()
+      val run = Runnable { pending = null; if (phoneInUse() && eveningDue(p)) startEvening(p) }
+      pending = run
+      handler.postDelayed(run, 5000)
+      return
+    }
     if (!p.enabled) return
     val now = Calendar.getInstance()
     val today = "${now.get(Calendar.YEAR)}-${now.get(Calendar.DAY_OF_YEAR)}"
@@ -317,6 +368,8 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
     const val MORNING_ID = 4102
     const val MORNING_URI = "chief://morning"
     const val WAKE_URI = "chief://wake"
+    const val EVENING_URI = "chief://evening"
+    const val ACTION_EVENING = "xyz.chief.companion.EVENING"
     const val KEYWORD_FILE = "hey-chief_android.ppn"
     const val ACTION_REFRESH = "xyz.chief.companion.REFRESH"
     const val ACTION_PAUSE_WAKE = "xyz.chief.companion.PAUSE_WAKE"
@@ -384,6 +437,23 @@ class CompanionService : Service(), TextToSpeech.OnInitListener {
       return b.build()
     }
 
+    /** Daily alarm at the evening check-in time. */
+    fun scheduleEvening(ctx: Context) {
+      val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+      val i = Intent(ctx, EveningReceiver::class.java).setAction(ACTION_EVENING)
+      val pi = PendingIntent.getBroadcast(ctx, 6900, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+      am.cancel(pi)
+      val p = Prefs(ctx)
+      if (!p.eveningOn) return
+      val next = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, p.eveningHour); set(Calendar.MINUTE, p.eveningMinute); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        if (timeInMillis <= System.currentTimeMillis() + 1000) add(Calendar.DAY_OF_YEAR, 1)
+      }
+      val exact = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()
+      if (exact) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.timeInMillis, pi)
+      else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next.timeInMillis, pi)
+    }
+
     /** Replace all spoken reminders with a new list of [epochMillis, text]. */
     fun scheduleAnnouncements(ctx: Context, json: String) {
       val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -425,9 +495,17 @@ class AnnounceReceiver : BroadcastReceiver() {
   }
 }
 
+/** Fires at the evening check-in time. */
+class EveningReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent) {
+    CompanionService.send(context, CompanionService.ACTION_EVENING)
+  }
+}
+
 /** Restarts the background service after a reboot or an app update. */
 class BootReceiver : BroadcastReceiver() {
   override fun onReceive(context: Context, intent: Intent) {
+    CompanionService.scheduleEvening(context)
     if (Prefs(context).needsService) CompanionService.send(context, CompanionService.ACTION_REFRESH)
   }
 }

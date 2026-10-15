@@ -9,6 +9,7 @@ export type WakeStatus = {
 type Native = {
   configure(enabled: boolean, wakeHour: number, wakeMinute: number, delaySeconds: number): boolean;
   configureWake(on: boolean, accessKey: string): boolean;
+  configureEvening(on: boolean, hour: number, minute: number): boolean;
   wakeStatus(): WakeStatus;
   refresh(): boolean;
   batteryUnrestricted(): boolean;
@@ -40,6 +41,12 @@ export function configureMorning(enabled: boolean, wakeTime: string, delaySecond
   if (!native) return false;
   const [h, m] = wakeTime.split(":").map((n) => parseInt(n, 10));
   return safe(() => native.configure(enabled, h || 0, m || 0, delaySeconds), false);
+}
+
+export function configureEvening(on: boolean, time: string) {
+  if (!native) return false;
+  const [h, m] = time.split(":").map((n) => parseInt(n, 10));
+  return safe(() => native.configureEvening(on, h || 21, m || 0), false);
 }
 
 export const canOpenByItself = () => safe(() => native?.canOpenByItself() ?? false, false);

@@ -23,6 +23,9 @@
     <receiver
       android:name="xyz.chief.companion.AnnounceReceiver"
       android:exported="false" />
+    <receiver
+      android:name="xyz.chief.companion.EveningReceiver"
+      android:exported="false" />
 
     <receiver
       android:name="xyz.chief.companion.BootReceiver"

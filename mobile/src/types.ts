@@ -49,6 +49,7 @@ export type ChiefEvent =
   | { type: "morning_checkin" }
   | { type: "plan_day" }
   | { type: "morning_start" }
+  | { type: "evening_start" }
   | { type: "no_answer" }
   | { type: "followup"; about?: string }
   | { type: "approve_plan" }
