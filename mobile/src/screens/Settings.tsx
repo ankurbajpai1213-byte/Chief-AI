@@ -191,7 +191,7 @@ export default function Settings({ profile, onSaved }: Props) {
           {wakeOn && live && (
             <View style={{ gap: space.xs }}>
               <Body style={{ color: live.listening ? c.done : c.slip, fontWeight: "700" }}>
-                {live.listening ? `● Listening now${live.engine === "porcupine" ? " (Picovoice)" : ""}` : live.paused ? "Paused while you talk to Chief" : "○ Not listening"}
+                {live.listening ? `● Listening now${live.engine === "porcupine" ? " (Picovoice)" : " · voice model ready"}` : live.paused ? "Paused while you talk to Chief" : "○ Not listening"}
               </Body>
               {!live.listening && !live.paused && (
                 <Body muted>Not listening. Tap Restart listening; if it keeps stopping, allow Chief to run without battery limits.</Body>

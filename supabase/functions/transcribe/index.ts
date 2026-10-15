@@ -48,6 +48,11 @@ Deno.serve(async (req) => {
     let text = (result.text ?? "").trim();
     // Whisper sometimes echoes its hint when the recording is near-silent; never pass that on as the user's words.
     if (text.toLowerCase().includes("written in roman script") || text.toLowerCase().includes("hindi and english mixed")) text = "";
+    // Phrases Whisper is known to invent on silence or at the end of a clip.
+    for (const junk of ["thank you for watching", "thanks for watching", "please subscribe", "like and subscribe", "subtitles by"]) {
+      const i = text.toLowerCase().lastIndexOf(junk);
+      if (i >= 0) text = (text.slice(0, i) + text.slice(i + junk.length)).replace(/[ .!,]+$/, "").trim();
+    }
     return json({ text });
   } catch (e) {
     console.error(e);

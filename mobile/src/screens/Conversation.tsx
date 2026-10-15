@@ -26,11 +26,20 @@ const WAIT_FOR_SPEECH_MS = 7000; // how long Chief waits for an answer
 const END_OF_SPEECH_MS = 1600;   // pause that means "I'm done talking"
 const MAX_ANSWER_MS = 30000;
 
+// Never wait forever on the voice engine: if Android doesn't report "done", move on
+// after a generous estimate of how long the sentence takes to say.
 const speak = (text: string) =>
   new Promise<void>((resolve) => {
+    let finished = false;
+    const finish = () => { if (!finished) { finished = true; clearTimeout(guard); resolve(); } };
+    const guard = setTimeout(finish, 2500 + text.length * 90);
     Speech.stop();
-    Speech.speak(text, { language: "en-IN", onDone: () => resolve(), onStopped: () => resolve(), onError: () => resolve() });
+    setTimeout(() => {
+      Speech.speak(text, { language: "en-IN", volume: 1.0, onDone: finish, onStopped: finish, onError: finish });
+    }, 150);
   });
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export default function Conversation({ start, name, onClose, onChanged, onFollowUp }: Props) {
   const c = useColors();
@@ -39,6 +48,7 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
   const [line, setLine] = useState("");
   const [heard, setHeard] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [level, setLevel] = useState<number | null>(null);
   const alive = useRef(true);
   const pulse = useRef(new Animated.Value(0)).current;
 
@@ -55,6 +65,8 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
   const listen = async (): Promise<string | null> => {
     const { granted } = await AudioModule.requestRecordingPermissionsAsync();
     if (!granted) throw new Error("Chief needs the microphone. Allow it in Android settings.");
+    pauseWake(); // make sure "Hey Chief" has let go of the microphone
+    await sleep(350);
     await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
     await recorder.prepareToRecordAsync();
     recorder.record();
@@ -64,6 +76,7 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
     let spoke = false;
     let lastLoud = 0;
     let metered = false;
+    let loudest = -160;
 
     await new Promise<void>((resolve) => {
       const tick = setInterval(() => {
@@ -72,8 +85,10 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
         const level = recorder.getStatus().metering;
         if (typeof level === "number" && Number.isFinite(level)) {
           metered = true;
+          loudest = Math.max(loudest, level);
           if (now - startedAt < 500) baseline = baseline === null ? level : Math.min(baseline, level);
-          const threshold = Math.max((baseline ?? -60) + 12, -45);
+          // Relative to the room's noise, but a clearly loud sound always counts (even if they talked straight away).
+          const threshold = Math.min(Math.max((baseline ?? -60) + 10, -48), -32);
           if (level > threshold) { spoke = true; lastLoud = now; }
         }
         const waitedTooLong = !spoke && now - startedAt > WAIT_FOR_SPEECH_MS;
@@ -86,7 +101,9 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
 
     await recorder.stop();
     await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
-    if (metered && !spoke) return null;
+    setLevel(Math.round(loudest));
+    // Only skip the upload when the microphone heard near-silence the whole time.
+    if (metered && !spoke && loudest < -50) return null;
     if (!recorder.uri || !alive.current) return null;
     setPhase("hearing");
     const text = (await transcribe(recorder.uri)).trim();
@@ -111,7 +128,11 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
           setPhase("listening");
           const first = await listen();
           if (!alive.current) return;
-          if (!first) { setPhase("ended"); setTimeout(() => alive.current && onClose(), 1500); return; }
+          if (!first) {
+            setLine("I didn't catch that. Say \"Hey Chief\" again, or tap Close.");
+            setPhase("ended");
+            return;
+          }
           setHeard(first);
           next = sayToChief(first, true);
         } else {
@@ -157,6 +178,14 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Close by itself when finished, so "Hey Chief" starts listening again.
+  useEffect(() => {
+    if (phase !== "ended" || error) return;
+    const t = setTimeout(() => { if (alive.current) { alive.current = false; onClose(); } }, 5000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, error]);
+
   const close = () => {
     alive.current = false;
     Speech.stop();
@@ -182,6 +211,7 @@ export default function Conversation({ start, name, onClose, onChanged, onFollow
         {!!line && <Text style={[s.line, { color: c.ink }]}>{line}</Text>}
         {!!heard && <Text style={[s.heard, { color: c.you }]}>You: {heard}</Text>}
         {error && <Text style={[s.heard, { color: c.slip }]}>{error}</Text>}
+        {phase === "ended" && level !== null && <Text style={[s.heard, { color: c.muted, fontSize: 12 }]}>Mic level heard: {level} dB</Text>}
       </View>
       <Pressable onPress={close} accessibilityRole="button" style={[s.close, { borderColor: c.line, backgroundColor: c.surface }]}>
         <Text style={{ color: c.ink, fontWeight: "700", fontSize: 16 }}>{phase === "ended" ? "Close" : "Stop"}</Text>
